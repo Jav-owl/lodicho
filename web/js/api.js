@@ -1,4 +1,4 @@
-const PRODUCTION_ORIGIN = "https://lodicho.intiinside.com";
+const PRODUCTION_ORIGIN = "https://lodicho.zamarrito.com";
 const ES_LOCAL = ["localhost", "127.0.0.1"].includes(location.hostname);
 const BASE_URL = `${ES_LOCAL ? PRODUCTION_ORIGIN : ""}/api/v1`;
 

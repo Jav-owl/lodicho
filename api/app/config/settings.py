@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     ingest_api_token: str = ""
 
     # --- CORS ---
-    allowed_origins: str = ""  # separados por coma, ej: "https://lodicho.intiinside.com,http://localhost:8000"
+    allowed_origins: str = ""  # separados por coma, ej: "https://lodicho.zamarrito.com,http://localhost:8000"
 
     # --- Salvaguarda legal ---
     modo_silencio_electoral: bool = False

@@ -1,0 +1,17 @@
+# Override para el VPS compartido (ver docs/deploy.md). En .env del VPS:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml
+#
+# El host ya corre nginx + certbot en 80/443 (detras de Cloudflare), asi
+# que aqui: certbot no se levanta, y el nginx del stack solo escucha en
+# 127.0.0.1 sin TLS. El nginx del host le hace proxy.
+# Docker publica puertos saltandose UFW: por eso SIEMPRE 127.0.0.1.
+services:
+  nginx:
+    ports: !override
+      - "127.0.0.1:${LODICHO_HTTP_PORT:-18090}:80"
+    volumes: !override
+      - ./nginx/conf.d.prod:/etc/nginx/conf.d:ro
+      - ./web:/usr/share/nginx/html:ro
+
+  certbot:
+    profiles: ["standalone"]

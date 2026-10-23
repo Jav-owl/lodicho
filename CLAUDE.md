@@ -5,7 +5,7 @@ declaración de un candidato (por voz, texto o URL de nota de prensa) y el siste
 responde con evidencia recuperada de un corpus curado: qué dice el plan de trabajo
 registrado y qué establece el COOTAD sobre las competencias de ese nivel de gobierno.
 
-**Dominio:** lodicho.intiinside.com
+**Dominio:** lodicho.zamarrito.com
 
 
 ---
@@ -290,7 +290,7 @@ silencioso.
 ## Panel de admin
 
 Subir un PDF, convertirlo, revisarlo y publicarlo al corpus — todo desde
-`https://lodicho.intiinside.com/#/admin`, sin que quien revisa toque una terminal ni
+`https://lodicho.zamarrito.com/#/admin`, sin que quien revisa toque una terminal ni
 git. No enlazado desde la navegación pública a propósito (herramienta interna).
 
 **Auth:** una sola clave compartida (`ADMIN_PASSWORD`), sesión con token HMAC firmado

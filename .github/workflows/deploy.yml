@@ -1,0 +1,71 @@
+name: Deploy
+
+# Despliega a produccion en cada push a main. Sin acciones de terceros: solo
+# `ssh` del runner, para no depender de codigo ajeno con acceso a la llave.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Un deploy a la vez; si llega otro push, espera (no cancela uno a medias).
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: api/pyproject.toml
+      - run: pip install -e ".[dev]"
+      - run: pytest -q
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Los secretos viven en el Environment "production" (Settings ->
+    # Environments), no a nivel de repo. Alli se puede exigir aprobacion manual.
+    environment: production
+    steps:
+      - name: Preparar SSH
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Desplegar
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+        run: |
+          # La llave en el VPS esta atada a un comando forzado
+          # (scripts/deploy-entrypoint.sh): el argumento es solo el SHA a
+          # desplegar, no se ejecuta nada arbitrario.
+          ssh -i ~/.ssh/deploy_key \
+              -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -p "${DEPLOY_PORT:-22}" \
+              "${DEPLOY_USER}@${DEPLOY_HOST}" "${GITHUB_SHA}"
+
+      - name: Limpiar llave
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

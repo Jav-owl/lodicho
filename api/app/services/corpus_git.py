@@ -17,7 +17,7 @@ from pathlib import Path
 from app.config.settings import settings
 
 AUTOR_NOMBRE = "Lo Dicho (panel de admin)"
-AUTOR_EMAIL = "admin@lodicho.intiinside.com"
+AUTOR_EMAIL = "admin@lodicho.zamarrito.com"
 
 
 class GitCorpusError(Exception):

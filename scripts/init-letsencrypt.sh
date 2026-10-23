@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Bootstrap de Let's Encrypt para lodicho.intiinside.com. Correr UNA sola
+# Bootstrap de Let's Encrypt para lodicho.zamarrito.com. Correr UNA sola
 # vez, desde la raiz del repo en el VPS, con los servicios ya levantados
 # (make up) y CERTBOT_EMAIL seteado en .env.
 #
 # nginx/conf.d/lodicho.conf ya asume que existe un certificado real en
-# /etc/letsencrypt/live/lodicho.intiinside.com/ — pero nginx necesita ese
+# /etc/letsencrypt/live/lodicho.zamarrito.com/ — pero nginx necesita ese
 # archivo para poder arrancar el bloque 443, y Let's Encrypt necesita a
 # nginx corriendo para validar el dominio (reto HTTP-01). Este script
 # rompe ese circulo: crea un certificado dummy, arranca nginx con eso,
@@ -12,7 +12,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-DOMAIN="lodicho.intiinside.com"
+DOMAIN="lodicho.zamarrito.com"
 
 if [ -f .env ]; then
   set -a
