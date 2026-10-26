@@ -7,8 +7,8 @@ Push a `main` → corren los tests → el Action entra por SSH al VPS con una ll
 - Repo: fork `Jav-owl/lodicho` (el original, `intiinside/lodicho`, queda como `upstream`)
 - Dominio: `lodicho.zamarrito.com`, Cloudflare proxied, SSL/TLS **Full (strict)**
 - VPS: el de `docs/vps-audit.md` (Ubuntu 24.04, 47 GiB RAM, nginx + certbot en el host)
-- Ruta: `/home/deploy/docker/lodicho` y, como hermano, `/home/deploy/docker/lodicho-corpus`
-- Usuario de deploy: `deploy` (nuevo, sin sudo, grupo `docker`)
+- Ruta: `/home/javofox/docker/lodicho` y, como hermano, `/home/javofox/docker/lodicho-corpus`
+- Usuario de deploy: `javofox` (el mismo de la administración; ya está en el grupo `docker`). La llave del Action es una línea aparte de su `authorized_keys`, restringida a un solo comando
 
 ## Topología en el VPS compartido
 
@@ -69,18 +69,16 @@ auditoría. Recomendado: poner passphrase a la llave (`ssh-keygen -p -f ~/.ssh/l
 ## 1. Bootstrap del VPS (una vez, con tu usuario administrador)
 
 ```bash
-sudo adduser --disabled-password --gecos "" deploy
-sudo usermod -aG docker deploy   # docker = root sobre el host; por eso la llave del Action va restringida
+id javofox | grep -q docker && echo "javofox ya está en el grupo docker"   # docker = root sobre el host; por eso la llave del Action va restringida
 sudo ss -lntp | grep 18090 || echo "18090 libre"
 ```
 
 UFW no necesita cambios: 80/443 ya admiten Cloudflare y 22 está abierto para el Action.
 Recomendado: `fail2ban` para sshd.
 
-## 2. Llaves y repos (como `deploy`)
+## 2. Llaves y repos (como `javofox`)
 
 ```bash
-sudo -iu deploy
 install -d -m 700 ~/.ssh && mkdir -p ~/docker && cd ~/docker
 
 # Una deploy key de SOLO LECTURA por repo (GitHub no deja repetir una llave).
@@ -129,7 +127,7 @@ CORPUS_GIT_REMOTE=git@github.com:<CUENTA>/lodicho-corpus.git
 En el VPS, con sudo:
 
 ```bash
-sudo install -m 755 -o root -g root /home/deploy/docker/lodicho/scripts/deploy-entrypoint.sh /usr/local/bin/lodicho-deploy
+sudo install -m 755 -o root -g root /home/javofox/docker/lodicho/scripts/deploy-entrypoint.sh /usr/local/bin/lodicho-deploy
 # Revisa el diff y vuelve a copiarlo cada vez que cambie ese script.
 ```
 
@@ -139,7 +137,7 @@ En tu Mac genera la llave del Action (la privada solo irá a GitHub):
 ssh-keygen -t ed25519 -C "github-actions-lodicho" -f ./gha_lodicho -N ""
 ```
 
-`/home/deploy/.ssh/authorized_keys` (una línea, con el contenido de `gha_lodicho.pub`):
+`/home/javofox/.ssh/authorized_keys` — **agrega** (`>>`/editor, nunca sobrescribas: ahí está tu llave `lodicho-vps`) una línea con el contenido de `gha_lodicho.pub`:
 
 ```
 command="/usr/local/bin/lodicho-deploy",restrict ssh-ed25519 AAAA... github-actions-lodicho
@@ -171,23 +169,23 @@ Pestaña **Variables** (no sensibles, visibles en los logs):
 | Variable | Valor |
 |---|---|
 | `DEPLOY_HOST` | IP del VPS (**no** el dominio proxied: Cloudflare no pasa SSH) |
-| `DEPLOY_USER` | `deploy` |
+| `DEPLOY_USER` | `javofox` |
 | `DEPLOY_PORT` | `22` (opcional) |
 
 Pueden ir a nivel de repo o dentro del Environment `production` (el job lo declara, así
 que lee ambos). Con Environment se puede exigir *Required reviewers* y limitar a `main`:
 recomendado. Luego borra `gha_lodicho*` de tu Mac. Activa branch protection en `main` y 2FA.
 
-## 5. Primer arranque (a mano, como `deploy`)
+## 5. Primer arranque (a mano, como `javofox`)
 
 ```bash
 # nginx del host + certificado (con tu usuario administrador)
-sudo cp /home/deploy/docker/lodicho/docs/host/nginx-lodicho.zamarrito.com.conf /etc/nginx/sites-available/lodicho.zamarrito.com
+sudo cp /home/javofox/docker/lodicho/docs/host/nginx-lodicho.zamarrito.com.conf /etc/nginx/sites-available/lodicho.zamarrito.com
 sudo ln -s /etc/nginx/sites-available/lodicho.zamarrito.com /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx     # los avisos "protocol options redefined" son preexistentes
 sudo certbot --nginx -d lodicho.zamarrito.com    # el DNS ya debe estar proxied en Cloudflare
 
-# stack (como deploy)
+# stack
 cd ~/docker/lodicho && make up && make migrate && make init-qdrant
 curl -sI https://lodicho.zamarrito.com | head -3
 ```
@@ -198,8 +196,8 @@ Desde aquí, cada push a `main` despliega solo (o Actions → *Deploy* → *Run 
 
 - **Rotar la llave del Action:** nueva llave, reemplazar la línea de `authorized_keys`
   y el secret.
-- **Rollback:** `ssh deploy@… ` no es posible con la llave forzada; entra con tu usuario
-  admin: `sudo -iu deploy`, `cd ~/docker/lodicho && git checkout --detach <sha> && bash scripts/deploy.sh`.
+- **Rollback:** la llave del Action solo despliega; entra con `ssh lodicho-vps` y corre
+  `cd ~/docker/lodicho && git checkout --detach <sha> && bash scripts/deploy.sh`.
 - **Backups:** `postgres_data` y `qdrant_data` son volúmenes Docker; el deploy no los
   toca, pero no hay backup programado todavía.
 - **Cuenta nueva:** `lodicho-corpus` también debe migrar a la cuenta nueva y actualizar
