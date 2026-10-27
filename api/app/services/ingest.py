@@ -62,6 +62,9 @@ ENCABEZADO_EJE_RE = re.compile(r"^#\s+.+$", re.MULTILINE)
 
 CHARS_POR_TOKEN_APROX = 4  # heuristica gruesa: no hay tokenizer de Gemini local
 OBJETIVO_TOKENS_CONTEXTO = 500
+# Un articulo mas largo que esto se subdivide al chunkear (ver
+# `_subdividir_articulo`); el validador del corpus usa el mismo limite.
+LIMITE_TOKENS_POR_CHUNK = 1500
 
 
 class IngestaError(Exception):
@@ -169,11 +172,69 @@ def git_sha_del_archivo(corpus_path: Path, ruta_relativa: str) -> str:
 
 def _chunkear(body: str, tipo: str) -> list[str]:
     if tipo == "marco_legal":
-        return _dividir_por_indices(body, [m.start() for m in ARTICULO_RE.finditer(body)])
+        return [
+            parte
+            for articulo in _articulos(body)
+            for parte in _subdividir_articulo(articulo)
+        ]
     if tipo == "plan_trabajo":
         indices = [m.start() for m in ENCABEZADO_EJE_RE.finditer(body)]
         return _dividir_por_indices(body, indices) if indices else [body]
     return _chunk_semantico(body)
+
+
+def _articulos(body: str) -> list[str]:
+    return _dividir_por_indices(body, [m.start() for m in ARTICULO_RE.finditer(body)])
+
+
+def _subdividir_articulo(articulo: str) -> list[str]:
+    """Un articulo que supera el limite (p. ej. una reforma que reproduce un
+    articulo entero con su tabla de multas) se corta en partes por parrafo,
+    luego por linea (filas de tabla) y, si hace falta, por oracion. El texto
+    de cada parte es el original, sin recortar; las partes siguientes llevan
+    una linea de contexto para que el chunk no quede huerfano del articulo."""
+    limite_chars = LIMITE_TOKENS_POR_CHUNK * CHARS_POR_TOKEN_APROX
+    if len(articulo) <= limite_chars:
+        return [articulo]
+
+    primera_linea = articulo.strip().splitlines()[0][:80]
+    prefijo = f"[Continuación de: {primera_linea}]\n\n"
+    partes = _agrupar(_unidades_de_articulo(articulo, limite_chars - len(prefijo)), limite_chars - len(prefijo))
+    return partes[:1] + [prefijo + p for p in partes[1:]]
+
+
+def _unidades_de_articulo(articulo: str, limite_chars: int) -> list[tuple[str, str]]:
+    """Trozos indivisibles del articulo, cada uno con el separador que lo une
+    al siguiente (asi una tabla cortada por filas sigue siendo una tabla)."""
+    unidades: list[tuple[str, str]] = []
+    for parrafo in re.split(r"\n\s*\n", articulo):
+        if not parrafo.strip():
+            continue
+        if len(parrafo) <= limite_chars:
+            unidades.append((parrafo, "\n\n"))
+            continue
+        lineas = parrafo.splitlines()
+        for i, linea in enumerate(lineas):
+            sep = "\n\n" if i == len(lineas) - 1 else "\n"
+            if len(linea) <= limite_chars:
+                unidades.append((linea, sep))
+            else:
+                unidades.extend((o, " ") for o in _dividir_parrafo_largo(linea, limite_chars))
+    return unidades
+
+
+def _agrupar(unidades: list[tuple[str, str]], limite_chars: int) -> list[str]:
+    partes: list[str] = []
+    actual, sep_previo = "", ""
+    for texto, sep in unidades:
+        if actual and len(actual) + len(sep_previo) + len(texto) > limite_chars:
+            partes.append(actual)
+            actual, sep_previo = "", ""
+        actual = f"{actual}{sep_previo}{texto}" if actual else texto
+        sep_previo = sep
+    if actual:
+        partes.append(actual)
+    return partes
 
 
 def _dividir_por_indices(body: str, indices: list[int]) -> list[str]:

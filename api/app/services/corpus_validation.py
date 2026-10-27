@@ -13,7 +13,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from app.services.ingest import ARTICULO_RE, _chunkear
+from app.services.ingest import (
+    ARTICULO_RE,
+    LIMITE_TOKENS_POR_CHUNK,
+    _articulos,
+    _chunkear,
+    _subdividir_articulo,
+)
 
 TIPOS_VALIDOS = {"marco_legal", "plan_trabajo", "contexto"}
 
@@ -33,7 +39,6 @@ CAMPOS_CONTEXTO = ["jurisdiccion_dpa"]
 
 RATIO_MD_PDF_MINIMO = 0.85
 MAX_REPETICIONES_LINEA = 5
-LIMITE_TOKENS_POR_CHUNK = 1500
 CHARS_POR_TOKEN_APROX = 4
 
 DOC_ID_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -154,11 +159,23 @@ def _validar_tildes(body: str, r: ResultadoValidacion) -> None:
 
 
 def _validar_umbral_tokens(body: str, tipo: str, r: ResultadoValidacion) -> None:
+    # El chunker ya subdivide los articulos largos; aca solo queda error si
+    # algo sigue sobre el limite despues de eso (p. ej. una oracion sin puntos).
     for chunk in _chunkear(body, tipo):
         tokens_aprox = len(chunk) / CHARS_POR_TOKEN_APROX
         if tokens_aprox > LIMITE_TOKENS_POR_CHUNK:
             inicio = chunk.strip().splitlines()[0][:60] if chunk.strip() else "(vacio)"
             r.errores.append(f"Un chunk (~{int(tokens_aprox)} tokens, empieza con {inicio!r}...) supera el umbral de {LIMITE_TOKENS_POR_CHUNK}.")
+
+    if tipo == "marco_legal":
+        for articulo in _articulos(body):
+            partes = _subdividir_articulo(articulo)
+            if len(partes) > 1:
+                inicio = articulo.strip().splitlines()[0][:60]
+                r.warnings.append(
+                    f"El articulo que empieza con {inicio!r} (~{int(len(articulo) / CHARS_POR_TOKEN_APROX)} tokens) "
+                    f"se subdivide en {len(partes)} chunks al ingestar."
+                )
 
 
 def _validar_ratio_pdf(body: str, texto_pdf: str, r: ResultadoValidacion) -> None:
