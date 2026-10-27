@@ -47,7 +47,9 @@ jobs:
   deploy:
     needs: test
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # El build de api/worker (torch + docling + modelos) en el VPS compartido
+    # puede pasar de 30 min cuando la cache de capas se invalida.
+    timeout-minutes: 60
     # Los secretos viven en el Environment "production" (Settings ->
     # Environments), no a nivel de repo. Alli se puede exigir aprobacion manual.
     environment: production
