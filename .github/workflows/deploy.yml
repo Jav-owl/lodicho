@@ -73,8 +73,12 @@ jobs:
           # La llave en el VPS esta atada a un comando forzado
           # (scripts/deploy-entrypoint.sh): el argumento es solo el SHA a
           # desplegar, no se ejecuta nada arbitrario.
+          # ServerAlive*: el build tiene tramos largos sin salida (p. ej.
+          # "unpacking" de imagenes grandes) y sin keepalive la conexion se
+          # corta con "Broken pipe" (exit 255).
           ssh -i ~/.ssh/deploy_key \
               -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o ServerAliveInterval=30 -o ServerAliveCountMax=40 \
               -p "${DEPLOY_PORT:-22}" \
               "${DEPLOY_USER}@${DEPLOY_HOST}" "${GITHUB_SHA}"
 
