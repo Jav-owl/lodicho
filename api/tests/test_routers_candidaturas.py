@@ -88,7 +88,10 @@ def test_obtener_candidatura_inexistente_404(client):
     assert respuesta.status_code == 404
 
 
-def test_obtener_candidatura_solo_incluye_informes_publicados(client, db_session):
+def test_obtener_candidatura_solo_incluye_informes_publicados(client, db_session, monkeypatch):
+    # El endpoint trae el plan con scroll a Qdrant; aca no se prueba eso, y
+    # sin este stub el test exige un Qdrant real corriendo en localhost.
+    monkeypatch.setattr("app.routers.candidaturas.listar_plan_trabajo", lambda *a, **k: [])
     candidatura = _crear_candidatura(db_session)
 
     session_ = db_session
