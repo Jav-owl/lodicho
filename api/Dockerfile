@@ -49,6 +49,11 @@ RUN docling-tools models download
 # competencia con uvicorn/otros procesos.
 ENV OMP_NUM_THREADS=4
 
+# /corpus es un bind mount del host con otro dueno que el root del
+# contenedor; sin esto git rechaza operar ahi ("dubious ownership") y
+# fallan git_sha_del_archivo y el commit automatico del panel de admin.
+RUN git config --system --add safe.directory /corpus
+
 EXPOSE 8000
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
