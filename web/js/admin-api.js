@@ -76,11 +76,25 @@ export async function login(password) {
   return cuerpo;
 }
 
-export function convertir(tipo, archivoPdf) {
+// Docling puede tardar varios minutos y Cloudflare corta cualquier peticion a
+// los ~100s (524): el POST solo inicia el trabajo y aca se consulta su estado.
+const CONVERSION_POLL_MS = 3000;
+const CONVERSION_MAX_MS = 30 * 60 * 1000;
+
+export async function convertir(tipo, archivoPdf) {
   const formData = new FormData();
   formData.set("tipo", tipo);
   formData.set("pdf", archivoPdf);
-  return llamar("/documentos/convertir", { method: "POST", body: formData });
+  const { job_id } = await llamar("/documentos/convertir", { method: "POST", body: formData });
+
+  const inicio = Date.now();
+  while (Date.now() - inicio < CONVERSION_MAX_MS) {
+    await new Promise((resolver) => setTimeout(resolver, CONVERSION_POLL_MS));
+    const estado = await llamar(`/documentos/convertir/${job_id}`);
+    if (estado.estado === "listo") return estado.resultado;
+    if (estado.estado === "error") throw new ErrorAPI(estado.detalle || "No se pudo convertir el PDF.");
+  }
+  throw new ErrorAPI("La conversión tarda demasiado. Revisa el servidor e inténtalo de nuevo.");
 }
 
 export function importarMarkdown(tipo, archivoMd) {

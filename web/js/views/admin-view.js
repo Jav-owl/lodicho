@@ -409,7 +409,7 @@ function renderSubir(container, api) {
     }
     boton.disabled = true;
     estadoEl.innerHTML = modo === "pdf"
-      ? `<div class="loading-state"><div class="apple-spinner"></div><p>Docling está extrayendo texto y tablas del documento...</p></div>`
+      ? `<div class="loading-state"><div class="apple-spinner"></div><p>Docling está extrayendo texto y tablas del documento... puede tardar varios minutos, no cierres esta pantalla.</p></div>`
       : `<div class="loading-state"><div class="apple-spinner"></div><p>Leyendo el markdown...</p></div>`;
 
     try {

@@ -131,31 +131,48 @@ class ConvertirResponse(BaseModel):
     tipo: str
 
 
-@router.post("/documentos/convertir", response_model=ConvertirResponse, dependencies=[Depends(requiere_admin)])
-async def convertir(tipo: str = Form(...), pdf: UploadFile = File(...)) -> ConvertirResponse:
-    if tipo not in DIR_POR_TIPO:
-        raise HTTPException(status_code=422, detail=f"tipo debe ser uno de {list(DIR_POR_TIPO)}")
+class IniciarConversionResponse(BaseModel):
+    job_id: str
+
+
+class EstadoConversionResponse(BaseModel):
+    estado: str  # "procesando" | "listo" | "error"
+    resultado: ConvertirResponse | None = None
+    detalle: str | None = None
+
+
+# Docling puede tardar varios minutos en un PDF real, y Cloudflare corta
+# cualquier peticion que no responda en ~100s (524). Por eso la conversion
+# no se espera dentro del request: POST /convertir devuelve un job_id al
+# instante y el front consulta GET /convertir/{job_id} hasta que termine.
+# Mismo criterio que los borradores: estado en memoria de proceso.
+_jobs_conversion: dict[str, dict[str, Any]] = {}
+_tareas_conversion: set[asyncio.Task] = set()  # referencia fuerte: asyncio no retiene tareas sueltas
+# Una conversion a la vez: Docling satura varios nucleos y el VPS es compartido.
+_cupo_conversion = asyncio.Semaphore(1)
+
+
+def _respuesta_de_borrador(borrador_id: str) -> ConvertirResponse:
+    b = _obtener_borrador(borrador_id)
+    return ConvertirResponse(
+        borrador_id=borrador_id, markdown=b.markdown, pdf_sha256=b.pdf_sha256, tipo=b.meta["tipo"]
+    )
+
+
+async def _ejecutar_conversion(job_id: str, tipo: str, pdf_path: Path, pdf_sha256: str) -> None:
+    try:
+        async with _cupo_conversion:
+            # asyncio.to_thread saca a Docling del event loop: sincrono dentro
+            # de una ruta async bloquearia el unico loop del proceso (ni
+            # siquiera /health responderia mientras tanto).
+            markdown = await asyncio.to_thread(pdf_conversion.convertir_pdf_a_markdown, pdf_path)
+        texto_pdf = await asyncio.to_thread(_extraer_texto_plano, pdf_path)
+    except Exception as exc:  # noqa: BLE001 — cualquier fallo se reporta al front por el job
+        pdf_path.unlink(missing_ok=True)
+        _jobs_conversion[job_id] = {"estado": "error", "detalle": f"No se pudo convertir el PDF: {exc}"}
+        return
 
     borrador_id = str(uuid.uuid4())
-    pdf_path = _TMP_DIR / f"{borrador_id}.pdf"
-    with pdf_path.open("wb") as destino:
-        shutil.copyfileobj(pdf.file, destino)
-
-    pdf_sha256 = pdf_conversion.calcular_sha256(pdf_path)
-
-    try:
-        # Docling puede tardar minutos en un PDF real (mas la primera vez,
-        # que carga los modelos de layout). Corrido tal cual, sincrono,
-        # dentro de un endpoint async, bloquearia el unico event loop del
-        # proceso — nadie mas se podria atender mientras tanto, ni
-        # siquiera /health. asyncio.to_thread lo saca del loop.
-        markdown = await asyncio.to_thread(pdf_conversion.convertir_pdf_a_markdown, pdf_path)
-    except Exception as exc:
-        pdf_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=422, detail=f"No se pudo convertir el PDF: {exc}") from exc
-
-    texto_pdf = await asyncio.to_thread(_extraer_texto_plano, pdf_path)
-
     _borradores[borrador_id] = Borrador(
         markdown=markdown,
         meta={"tipo": tipo, "vigente": True},
@@ -163,8 +180,49 @@ async def convertir(tipo: str = Form(...), pdf: UploadFile = File(...)) -> Conve
         pdf_sha256=pdf_sha256,
         texto_pdf=texto_pdf,
     )
+    _jobs_conversion[job_id] = {"estado": "listo", "borrador_id": borrador_id}
 
-    return ConvertirResponse(borrador_id=borrador_id, markdown=markdown, pdf_sha256=pdf_sha256, tipo=tipo)
+
+@router.post(
+    "/documentos/convertir",
+    response_model=IniciarConversionResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(requiere_admin)],
+)
+async def convertir(tipo: str = Form(...), pdf: UploadFile = File(...)) -> IniciarConversionResponse:
+    if tipo not in DIR_POR_TIPO:
+        raise HTTPException(status_code=422, detail=f"tipo debe ser uno de {list(DIR_POR_TIPO)}")
+
+    job_id = str(uuid.uuid4())
+    pdf_path = _TMP_DIR / f"{job_id}.pdf"
+    with pdf_path.open("wb") as destino:
+        shutil.copyfileobj(pdf.file, destino)
+
+    pdf_sha256 = pdf_conversion.calcular_sha256(pdf_path)
+
+    _jobs_conversion[job_id] = {"estado": "procesando"}
+    tarea = asyncio.create_task(_ejecutar_conversion(job_id, tipo, pdf_path, pdf_sha256))
+    _tareas_conversion.add(tarea)
+    tarea.add_done_callback(_tareas_conversion.discard)
+
+    return IniciarConversionResponse(job_id=job_id)
+
+
+@router.get(
+    "/documentos/convertir/{job_id}",
+    response_model=EstadoConversionResponse,
+    dependencies=[Depends(requiere_admin)],
+)
+async def estado_conversion(job_id: str) -> EstadoConversionResponse:
+    job = _jobs_conversion.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Conversión no encontrada (¿el servidor se reinició?)")
+    if job["estado"] == "listo":
+        return EstadoConversionResponse(estado="listo", resultado=_respuesta_de_borrador(job["borrador_id"]))
+    if job["estado"] == "error":
+        return EstadoConversionResponse(estado="error", detalle=job["detalle"])
+    return EstadoConversionResponse(estado="procesando")
+
 
 @router.post(
     "/documentos/importar-markdown", response_model=ConvertirResponse, dependencies=[Depends(requiere_admin)]

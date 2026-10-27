@@ -15,3 +15,7 @@ services:
 
   certbot:
     profiles: ["standalone"]
+
+  # Docling llego a usar ~9 nucleos: el VPS es compartido, se acota.
+  api:
+    cpus: 4
