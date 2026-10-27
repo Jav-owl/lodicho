@@ -20,9 +20,9 @@ registrado y qué establece el COOTAD sobre las competencias de ese nivel de gob
 Están separados a propósito: no mezclar. Un push al corpus no debe disparar CI de
 despliegue, y un push de código no debe disparar reindexación.
 
-`lodicho-corpus` es un repo privado en GitHub (`github.com/intiinside/lodicho-corpus`),
+`lodicho-corpus` es un repo privado en GitHub (`github.com/Jav-owl/lodicho-corpus`),
 clonado como carpeta **hermana** de este repo tanto en desarrollo como en el VPS
-(`/opt/lodicho-corpus` junto a `/opt/lodicho`) — `docker-compose.yml` lo monta como
+(`~/docker/lodicho-corpus` junto a `~/docker/lodicho`) — `docker-compose.yml` lo monta como
 volumen en el contenedor `api`. Si no existe en la máquina, Docker crea ahí una carpeta
 vacía en vez de fallar; hay que clonarlo a mano.
 
@@ -30,8 +30,11 @@ vacía en vez de fallar; hay que clonarlo a mano.
 
 ## Stack
 
-- **Host:** Ubuntu Server 24.04, Hetzner VPS, Docker Compose
-- **Proxy:** Nginx + Certbot
+- **Host:** VPS compartido con otros proyectos (Ubuntu 24.04), Docker Compose. Despliegue
+  por GitHub Actions — ver "Despliegue" más abajo y `docs/deploy.md`.
+- **Proxy:** nginx + certbot **del host** terminan TLS en 80/443 y hacen proxy al nginx del
+  stack, que solo publica en `127.0.0.1:18090` (`docker-compose.prod.yml`). Cloudflare
+  delante (proxied, SSL Full strict).
 - **API:** FastAPI (Python 3.12) + Pydantic v2
 - **Jobs:** ARQ + Redis
 - **Relacional:** PostgreSQL 16 + Alembic
@@ -274,10 +277,17 @@ Validado en CI. PR que no cumpla el esquema se rechaza.
 - Tildes y `ñ` en proporción esperable (detecta corrupción de encoding)
 - Ningún chunk sobre el umbral de tokens
 
-Implementadas **dos veces a propósito**, en Python puro ambas, sin importar una de la
-otra (los repos no se cruzan): `lodicho-corpus/scripts/validar_frontmatter.py` (corre
-en la GitHub Action, Camino A) y `api/app/services/corpus_validation.py` (corre en el
-panel de admin, Camino B). Si cambia una regla, cambiar en los dos lugares.
+Hoy viven en `api/app/services/corpus_validation.py` (panel de admin, Camino B). El
+diseño original las duplicaba en `lodicho-corpus/scripts/validar_frontmatter.py` (GitHub
+Action, Camino A) para que los repos no se crucen, pero ese script y la Action **no
+existen** en el `Jav-owl/lodicho-corpus` recreado. Si se reponen, mantener las reglas
+iguales en los dos lugares.
+
+Matices implementados: un artículo de `marco_legal` que supera 1500 tokens **no es
+error**: el chunker lo subdivide (párrafo → fila de tabla → oración) sin recortar texto y
+el validador solo avisa. Sí es error un `nivel_gobierno` fuera de `provincial` /
+`cantonal` / `parroquial_rural` (`DIGNIDAD_A_NIVEL_GOBIERNO`): la recuperación filtra por
+coincidencia exacta y otro valor deja el documento indexado pero inalcanzable.
 
 **Conversión:** Docling, corriendo del lado del servidor dentro del panel de admin
 (`api/app/services/pdf_conversion.py`). Reservar LLM solo para escaneados — no
@@ -298,9 +308,10 @@ git. No enlazado desde la navegación pública a propósito (herramienta interna
 revisores de confianza; si eso cambia, pasar a un usuario por persona (ver
 `api/app/services/admin_auth.py`).
 
-**Flujo:** subir PDF → `POST /api/v1/admin/documentos/convertir` (Docling, corre en un
-thread aparte vía `asyncio.to_thread` para no bloquear el único event loop del
-proceso mientras dura la conversión) → revisar/editar el Markdown y completar el
+**Flujo:** subir PDF → `POST /api/v1/admin/documentos/convertir` (responde 202 con un
+`job_id`; Docling corre en un thread aparte vía `asyncio.to_thread`, de a una conversión
+por vez, y el frontend consulta `GET .../convertir/{job_id}` cada 3 s hasta `listo` o
+`error`) → revisar/editar el Markdown y completar el
 frontmatter en pantalla → `.../borradores/{id}/validar` (mismas reglas que el Camino A)
 → `.../borradores/{id}/confirmar` (escribe el `.md` + PDF al corpus, commit + push
 automático) → botón "Ingestar" (`.../documentos/{doc_id}/ingestar`, mismo código que
@@ -344,10 +355,25 @@ del checkout).
   worker de uvicorn, bloquea el único event loop del proceso entero mientras dura la
   conversión — nadie más se puede atender mientras tanto, ni `/health`. Siempre
   `await asyncio.to_thread(...)`.
-- **Timeout de nginx en `/api/` es el default (60s).** Insuficiente para una conversión
-  Docling real, sobre todo la primera vez que carga los modelos de layout.
-  `/api/v1/admin/` tiene su propio `proxy_read_timeout 300s` en
-  `nginx/conf.d/lodicho.conf`.
+- **Cloudflare corta cualquier petición a ~100 s (error 524)**, y subir el
+  `proxy_read_timeout` de nginx no ayuda. Por eso la conversión es asíncrona (job + polling):
+  nunca volver a una petición que espere el resultado de Docling.
+- **Los jobs y borradores del panel viven en memoria del proceso `api`**: un deploy que lo
+  recree los pierde. No desplegar mientras alguien revisa un documento.
+- **Límite de CPU:** `api` lleva `cpus: 4` en producción (VPS compartido; Docling llegó a
+  ~9 núcleos). `docker stats` puede marcar más de 400 %; medir con `cpu.stat` del cgroup.
+
+---
+
+## Despliegue
+
+Push a `main` → GitHub Actions (`.github/workflows/deploy.yml`): job `test` (pytest con
+env ficticio) y job `deploy` (`environment: production`), que entra por SSH con una llave
+de **comando forzado** (`/usr/local/bin/lodicho-deploy`, copia de
+`scripts/deploy-entrypoint.sh`): solo acepta un SHA de `origin/main`, hace checkout y
+corre `scripts/deploy.sh` (build, `up`, migraciones, reinicio de nginx, health check).
+Secretos y variables en GitHub (Actions), cargados a mano; nada en el repo. Guía completa,
+bootstrap y mantenimiento: `docs/deploy.md`.
 
 ---
 
@@ -477,6 +503,8 @@ HTTPS) apuntando al backend de producción.
 - Migraciones con Alembic, siempre reversibles.
 - Ningún secreto en el repo. `.env` fuera de git; `.env.example` con claves vacías.
   Lo mismo para `secrets/` (deploy key SSH): solo `.gitkeep` y `README.md` van al repo.
+- Docker publica puertos saltándose UFW: en el VPS todo va a `127.0.0.1`, nunca a
+  `0.0.0.0`.
 - Qdrant y Postgres sin puertos publicados al host — solo red interna de Docker.
 - Rate limit agresivo por IP en endpoints públicos: la generación cuesta dinero.
 - Límite de 10 MB en subida de audio, validado antes de llamar a Gemini.
@@ -500,8 +528,8 @@ confiar en el código y en `docker compose ps` antes que en este párrafo.
   `qdrant`, todo en Docker Compose.
 - Esquema de base de datos completo, migración inicial aplicada.
 - Las 4 colecciones de Qdrant creadas con sus alias — **vacías** (sin contenido real).
-- `lodicho-corpus` vivo en GitHub (privado), con el validador de frontmatter y la
-  GitHub Action corriendo en cada PR.
+- `lodicho-corpus` vivo en GitHub (privado, cuenta `Jav-owl`), recreado desde cero:
+  estructura de carpetas y README; sin validador ni GitHub Action todavía.
 - Panel de admin (`#/admin`): login, subir PDF, convertir con Docling, revisar,
   commit + push automático al corpus, ingestar a Qdrant, **y alta de candidaturas**
   (`POST /api/v1/admin/candidaturas`, pantalla "Registrar Nueva Candidatura" — ya no
@@ -566,8 +594,13 @@ confiar en el código y en `docker compose ps` antes que en este párrafo.
   endpoint ni consumidor; fusionar un PR en `lodicho-corpus` no reindexa nada.
 - Detección de `.md` eliminado del corpus (status `removed` en la tabla de estados de
   archivo) — sigue sin un flujo que lo detecte.
-- Contenido real en el corpus: ni el COOTAD ni ningún plan de trabajo están
-  ingestados; `lodicho-corpus` no está ni clonado localmente en este entorno.
+- Contenido real en el corpus: ya hay un primer caso de punta a punta confirmado en
+  producción (una ordenanza metropolitana de Quito, `marco_legal`: PDF → Docling →
+  commit al corpus → Qdrant). Faltan el COOTAD y los planes de trabajo. Ojo: un
+  documento aplicable a todos los niveles no se puede etiquetar con un solo
+  `nivel_gobierno` (el filtro es exacto); resolverlo antes de cargar el COOTAD.
+- El chunker de `marco_legal` descarta el texto previo al primer `Artículo N`
+  (considerandos); si importan para consulta, hay que indexarlos aparte.
 - Set de evaluación de 25–30 afirmaciones anotadas a mano — no existe.
 
 **Siguiente paso lógico:** cargar el COOTAD real y al menos un plan de trabajo vía el

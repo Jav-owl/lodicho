@@ -15,7 +15,7 @@ estado actual, y las gotchas operativas que ya nos mordieron una vez — vive en
 | Repo | Qué tiene |
 |---|---|
 | `lodicho` (este) | API, worker, web, infra |
-| [`lodicho-corpus`](https://github.com/intiinside/lodicho-corpus) | `.md` con frontmatter + PDFs fuente del corpus |
+| [`lodicho-corpus`](https://github.com/Jav-owl/lodicho-corpus) | `.md` con frontmatter + PDFs fuente del corpus |
 
 Se clonan como carpetas **hermanas** (mismo directorio padre) — `docker-compose.yml`
 monta `lodicho-corpus` como volumen dentro del contenedor `api`.
@@ -41,7 +41,7 @@ HTTPS.
 | `POSTGRES_*` / `DATABASE_URL` | Postgres |
 | `REDIS_URL` | Redis (worker) |
 | `QDRANT_URL` | Qdrant |
-| `GEMINI_API_KEY` | Embeddings + generación (Google AI Studio, no OpenAI — el formato es `AIzaSy...`) |
+| `GEMINI_API_KEY` | Embeddings + generación (Google AI Studio, no OpenAI — las claves nuevas empiezan con `AQ.`, las antiguas con `AIzaSy`) |
 | `ADMIN_PASSWORD`, `ADMIN_SESSION_SECRET` | Panel de admin (`#/admin`) |
 | `CORPUS_GIT_REMOTE`, `CORPUS_GIT_SSH_KEY` | Commit/push automático a `lodicho-corpus` desde el panel |
 | `DOMAIN`, `CERTBOT_EMAIL` | HTTPS (Let's Encrypt) |
@@ -54,9 +54,10 @@ Resumen — el detalle de cada paso está en `CLAUDE.md` (sección "Panel de adm
 la deploy key, y la lista de gotchas operativas si algo no arranca):
 
 ```bash
-cd /opt
-git clone https://github.com/intiinside/lodicho.git
-git clone git@github.com:intiinside/lodicho-corpus.git   # repo privado, necesita acceso
+# Desarrollo local. Producción (VPS compartido + GitHub Actions): ver docs/deploy.md
+cd ~/docker
+git clone https://github.com/Jav-owl/lodicho.git
+git clone git@github.com:Jav-owl/lodicho-corpus.git   # repo privado, necesita acceso
 cd lodicho
 cp .env.example .env   # completar
 make up && make migrate && make init-qdrant

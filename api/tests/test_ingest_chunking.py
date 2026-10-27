@@ -4,7 +4,11 @@ su tabla de multas): se subdivide sin recortar texto, en vez de rechazarse.
 """
 from __future__ import annotations
 
-from app.services.corpus_validation import ResultadoValidacion, _validar_umbral_tokens
+from app.services.corpus_validation import (
+    ResultadoValidacion,
+    _validar_frontmatter_completo,
+    _validar_umbral_tokens,
+)
 from app.services.ingest import (
     CHARS_POR_TOKEN_APROX,
     LIMITE_TOKENS_POR_CHUNK,
@@ -75,3 +79,35 @@ def test_validador_rechaza_si_algo_no_se_puede_subdividir():
     _validar_umbral_tokens(_articulo_largo("palabra" * (LIMITE_CHARS // 7 + 100)), "marco_legal", r)
 
     assert any("supera el umbral" in e for e in r.errores)
+
+
+def _meta_marco_legal(**cambios):
+    meta = {
+        "doc_id": "ordenanza-metropolitana-001-quito",
+        "tipo": "marco_legal",
+        "fuente_url": "https://example.org/ordenanza.pdf",
+        "pdf_sha256": "a" * 64,
+        "convertido_con": "docling",
+        "revisado_por": "revisor",
+        "revisado_en": "2026-10-27",
+        "vigente": True,
+        "nivel_gobierno": "cantonal",
+    }
+    meta.update(cambios)
+    return meta
+
+
+def test_nivel_gobierno_valido_no_da_error():
+    r = ResultadoValidacion()
+
+    _validar_frontmatter_completo(_meta_marco_legal(), r)
+
+    assert r.errores == []
+
+
+def test_nivel_gobierno_que_no_coincide_con_el_filtro_da_error():
+    r = ResultadoValidacion()
+
+    _validar_frontmatter_completo(_meta_marco_legal(nivel_gobierno="Quito"), r)
+
+    assert any("nivel_gobierno: Quito" in e and "cantonal" in e for e in r.errores)

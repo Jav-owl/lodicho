@@ -20,6 +20,7 @@ from app.services.ingest import (
     _chunkear,
     _subdividir_articulo,
 )
+from app.services.resolucion_candidatura import DIGNIDAD_A_NIVEL_GOBIERNO
 
 TIPOS_VALIDOS = {"marco_legal", "plan_trabajo", "contexto"}
 
@@ -35,6 +36,10 @@ CAMPOS_COMUNES = [
 ]
 CAMPOS_PLAN_TRABAJO = ["candidatura_id", "dignidad", "organizacion", "lista_numero", "periodo", "jurisdiccion_dpa"]
 CAMPOS_MARCO_LEGAL = ["nivel_gobierno"]
+# `marco_legal` se recupera filtrando por coincidencia exacta de nivel_gobierno
+# (qdrant_client.search_marco_legal): cualquier otro valor se indexa pero
+# ninguna consulta lo encuentra, sin avisar.
+NIVELES_GOBIERNO = sorted(set(DIGNIDAD_A_NIVEL_GOBIERNO.values()))
 CAMPOS_CONTEXTO = ["jurisdiccion_dpa"]
 
 RATIO_MD_PDF_MINIMO = 0.85
@@ -90,6 +95,13 @@ def _validar_frontmatter_completo(meta: dict, r: ResultadoValidacion) -> None:
 
     if tipo is not None and tipo not in TIPOS_VALIDOS:
         r.errores.append(f"'tipo: {tipo}' no es valido. Debe ser uno de: {', '.join(sorted(TIPOS_VALIDOS))}.")
+
+    nivel = meta.get("nivel_gobierno")
+    if tipo == "marco_legal" and nivel not in (None, "") and nivel not in NIVELES_GOBIERNO:
+        r.errores.append(
+            f"'nivel_gobierno: {nivel}' no es valido: debe ser uno de {', '.join(NIVELES_GOBIERNO)} "
+            "(si no coincide exacto, ninguna consulta recupera este documento)."
+        )
 
     doc_id = meta.get("doc_id")
     if doc_id is not None:

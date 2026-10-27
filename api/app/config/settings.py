@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     admin_session_horas: int = 12
     corpus_path: str = "/corpus"  # mismo mount que usa scripts/ingest_corpus.py
     corpus_git_ssh_key: str = "/run/secrets/corpus_deploy_key"
-    corpus_git_remote: str = ""  # ej: git@github.com:intiinside/lodicho-corpus.git
+    corpus_git_remote: str = ""  # ej: git@github.com:Jav-owl/lodicho-corpus.git
 
     @property
     def allowed_origins_list(self) -> list[str]:

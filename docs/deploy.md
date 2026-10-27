@@ -200,5 +200,15 @@ Desde aquí, cada push a `main` despliega solo (o Actions → *Deploy* → *Run 
   `cd ~/docker/lodicho && git checkout --detach <sha> && bash scripts/deploy.sh`.
 - **Backups:** `postgres_data` y `qdrant_data` son volúmenes Docker; el deploy no los
   toca, pero no hay backup programado todavía.
-- **Cuenta nueva:** `lodicho-corpus` también debe migrar a la cuenta nueva y actualizar
-  `CORPUS_GIT_REMOTE`; `README.md`/`CLAUDE.md` aún citan `intiinside`.
+- **Builds lentos:** el `COPY app` va antes de `pip install .` en `api/Dockerfile`, así
+  que cualquier cambio de código reinstala torch/docling (30+ min la primera vez; con la
+  caché caliente, segundos) y `api`/`worker` construyen imágenes duplicadas. El job
+  `deploy` tiene `timeout-minutes: 60` y el `ssh` lleva keepalive (`ServerAliveInterval`)
+  porque el build tiene tramos largos sin salida y la conexión se cortaba con `Broken pipe`.
+  Si un deploy se corta, `bash scripts/deploy.sh` a mano en el VPS (idealmente dentro de
+  `tmux`) lo termina.
+- **Docling y CPU:** `api` tiene `cpus: 4` (`docker-compose.prod.yml`) porque el VPS es
+  compartido. `docker stats` puede mostrar más de 400 %: medir con
+  `/sys/fs/cgroup/cpu.stat` dentro del contenedor.
+- **Borradores en memoria:** un deploy que recree `api` pierde los borradores del panel
+  en revisión; no desplegar mientras alguien esté revisando un documento.
