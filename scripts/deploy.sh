@@ -29,7 +29,7 @@ echo "### Reiniciando nginx"
 docker compose restart nginx
 
 echo "### Health check"
-for i in $(seq 1 20); do
+for _ in $(seq 1 20); do
   if docker compose exec -T api python -c \
       "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status==200 else 1)" \
       2>/dev/null; then
