@@ -19,6 +19,16 @@ jobs:
   test:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    # Valores ficticios: app.db.session hace create_engine(settings.database_url)
+    # al importar, y con la URL vacia la coleccion de pytest revienta.
+    # create_engine no conecta; ningun test debe tocar una base real.
+    env:
+      DATABASE_URL: postgresql+psycopg://test:test@localhost:5432/test
+      REDIS_URL: redis://localhost:6379
+      QDRANT_URL: http://localhost:6333
+      GEMINI_API_KEY: test-key
+      ADMIN_PASSWORD: test-password
+      ADMIN_SESSION_SECRET: test-session-secret
     defaults:
       run:
         working-directory: api
