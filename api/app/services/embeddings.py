@@ -24,7 +24,11 @@ from app.config.settings import settings
 EMBEDDING_MODEL = "gemini-embedding-001"
 EMBEDDING_DIM = 768
 
-TASK_TYPE_DOCUMENT = "RETRIEVAL_DOCUMENT"
+# La API de Gemini rechaza mas de 100 textos por llamada a embed_content; un
+# documento largo (p. ej. el COOTAD) genera cientos de chunks.
+MAX_TEXTOS_POR_LLAMADA = 100
+
+TASK_TYPE_DOCUMENT ="RETRIEVAL_DOCUMENT"
 TASK_TYPE_QUERY = "RETRIEVAL_QUERY"
 
 _client: genai.Client | None = None
@@ -48,15 +52,18 @@ def _embed(texts: list[str], task_type: str) -> list[list[float]]:
     if not texts:
         return []
 
-    response = _get_client().models.embed_content(
-        model=EMBEDDING_MODEL,
-        contents=texts,
-        config=types.EmbedContentConfig(
-            task_type=task_type,
-            output_dimensionality=EMBEDDING_DIM,
-        ),
-    )
-    return [_l2_normalize(embedding.values) for embedding in response.embeddings]
+    vectores: list[list[float]] = []
+    for i in range(0, len(texts), MAX_TEXTOS_POR_LLAMADA):
+        response = _get_client().models.embed_content(
+            model=EMBEDDING_MODEL,
+            contents=texts[i : i + MAX_TEXTOS_POR_LLAMADA],
+            config=types.EmbedContentConfig(
+                task_type=task_type,
+                output_dimensionality=EMBEDDING_DIM,
+            ),
+        )
+        vectores.extend(_l2_normalize(embedding.values) for embedding in response.embeddings)
+    return vectores
 
 
 def embed_documents(texts: list[str]) -> list[list[float]]:
