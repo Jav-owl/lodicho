@@ -38,7 +38,7 @@ from app.config.settings import settings
 from app.db.models import Candidatura, Documento
 from app.db.models.enums import EstadoDocumento, TipoDocumento
 from app.services import embeddings, sparse
-from app.services.corpus_validation import NIVEL_TODOS, NIVELES_GOBIERNO
+from app.services.resolucion_candidatura import DIGNIDAD_A_NIVEL_GOBIERNO
 from app.services.qdrant_client import (
     ALIAS_CONTEXTO,
     ALIAS_MARCO_LEGAL,
@@ -51,6 +51,15 @@ DEFAULT_CORPUS_PATH = Path(settings.corpus_path)
 
 DIR_POR_TIPO = {"marco_legal": "marco_legal", "plan_trabajo": "planes_trabajo", "contexto": "contexto"}
 ALIAS_POR_TIPO = {"marco_legal": ALIAS_MARCO_LEGAL, "plan_trabajo": ALIAS_PLANES_TRABAJO, "contexto": ALIAS_CONTEXTO}
+
+# `marco_legal` se recupera filtrando por coincidencia exacta de nivel_gobierno
+# (qdrant_client.search_marco_legal): cualquier otro valor se indexa pero
+# ninguna consulta lo encuentra, sin avisar.
+NIVELES_GOBIERNO = sorted(set(DIGNIDAD_A_NIVEL_GOBIERNO.values()))
+# Una norma que rige a todos los niveles (p. ej. el COOTAD) se marca "todos":
+# al ingestar se guarda la lista completa de niveles en el payload, y el
+# filtro exacto de Qdrant coincide si CUALQUIER elemento de la lista es igual.
+NIVEL_TODOS = "todos"
 
 ARTICULO_RE = re.compile(
     r"^#{0,6}[ \t]*\**[ \t]*Art(?:ículo|iculo|\.)?[ \t]*(\d+)",

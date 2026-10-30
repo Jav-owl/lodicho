@@ -16,11 +16,12 @@ from dataclasses import dataclass, field
 from app.services.ingest import (
     ARTICULO_RE,
     LIMITE_TOKENS_POR_CHUNK,
+    NIVEL_TODOS,
+    NIVELES_GOBIERNO,
     _articulos,
     _chunkear,
     _subdividir_articulo,
 )
-from app.services.resolucion_candidatura import DIGNIDAD_A_NIVEL_GOBIERNO
 
 TIPOS_VALIDOS = {"marco_legal", "plan_trabajo", "contexto"}
 
@@ -36,14 +37,6 @@ CAMPOS_COMUNES = [
 ]
 CAMPOS_PLAN_TRABAJO = ["candidatura_id", "dignidad", "organizacion", "lista_numero", "periodo", "jurisdiccion_dpa"]
 CAMPOS_MARCO_LEGAL = ["nivel_gobierno"]
-# `marco_legal` se recupera filtrando por coincidencia exacta de nivel_gobierno
-# (qdrant_client.search_marco_legal): cualquier otro valor se indexa pero
-# ninguna consulta lo encuentra, sin avisar.
-NIVELES_GOBIERNO = sorted(set(DIGNIDAD_A_NIVEL_GOBIERNO.values()))
-# Una norma que rige a todos los niveles (p. ej. el COOTAD) se marca "todos":
-# al ingestar se guarda la lista completa de niveles en el payload, y el
-# filtro exacto de Qdrant coincide si CUALQUIER elemento de la lista es igual.
-NIVEL_TODOS = "todos"
 NIVELES_VALIDOS = [*NIVELES_GOBIERNO, NIVEL_TODOS]
 CAMPOS_CONTEXTO = ["jurisdiccion_dpa"]
 
