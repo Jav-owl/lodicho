@@ -40,6 +40,11 @@ CAMPOS_MARCO_LEGAL = ["nivel_gobierno"]
 # (qdrant_client.search_marco_legal): cualquier otro valor se indexa pero
 # ninguna consulta lo encuentra, sin avisar.
 NIVELES_GOBIERNO = sorted(set(DIGNIDAD_A_NIVEL_GOBIERNO.values()))
+# Una norma que rige a todos los niveles (p. ej. el COOTAD) se marca "todos":
+# al ingestar se guarda la lista completa de niveles en el payload, y el
+# filtro exacto de Qdrant coincide si CUALQUIER elemento de la lista es igual.
+NIVEL_TODOS = "todos"
+NIVELES_VALIDOS = [*NIVELES_GOBIERNO, NIVEL_TODOS]
 CAMPOS_CONTEXTO = ["jurisdiccion_dpa"]
 
 RATIO_MD_PDF_MINIMO = 0.85
@@ -97,9 +102,9 @@ def _validar_frontmatter_completo(meta: dict, r: ResultadoValidacion) -> None:
         r.errores.append(f"'tipo: {tipo}' no es valido. Debe ser uno de: {', '.join(sorted(TIPOS_VALIDOS))}.")
 
     nivel = meta.get("nivel_gobierno")
-    if tipo == "marco_legal" and nivel not in (None, "") and nivel not in NIVELES_GOBIERNO:
+    if tipo == "marco_legal" and nivel not in (None, "") and nivel not in NIVELES_VALIDOS:
         r.errores.append(
-            f"'nivel_gobierno: {nivel}' no es valido: debe ser uno de {', '.join(NIVELES_GOBIERNO)} "
+            f"'nivel_gobierno: {nivel}' no es valido: debe ser uno de {', '.join(NIVELES_VALIDOS)} "
             "(si no coincide exacto, ninguna consulta recupera este documento)."
         )
 

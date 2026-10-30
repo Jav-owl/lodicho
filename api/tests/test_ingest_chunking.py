@@ -111,3 +111,27 @@ def test_nivel_gobierno_que_no_coincide_con_el_filtro_da_error():
     _validar_frontmatter_completo(_meta_marco_legal(nivel_gobierno="Quito"), r)
 
     assert any("nivel_gobierno: Quito" in e and "cantonal" in e for e in r.errores)
+
+
+def test_nivel_gobierno_todos_es_valido():
+    r = ResultadoValidacion()
+
+    _validar_frontmatter_completo(_meta_marco_legal(nivel_gobierno="todos"), r)
+
+    assert r.errores == []
+
+
+def test_payload_marco_legal_todos_expande_a_los_tres_niveles():
+    from app.services.ingest import _payload
+
+    payload = _payload(_meta_marco_legal(nivel_gobierno="todos"), "marco_legal", "cootad", "texto", "sha")
+
+    assert payload["nivel_gobierno"] == ["cantonal", "parroquial_rural", "provincial"]
+
+
+def test_payload_marco_legal_nivel_unico_sigue_siendo_string():
+    from app.services.ingest import _payload
+
+    payload = _payload(_meta_marco_legal(), "marco_legal", "ordenanza", "texto", "sha")
+
+    assert payload["nivel_gobierno"] == "cantonal"

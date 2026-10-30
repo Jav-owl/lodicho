@@ -3,7 +3,7 @@ import { escapeHtml } from "../util.js";
 
 const CAMPOS_POR_TIPO = {
   marco_legal: [
-    { clave: "nivel_gobierno", etiqueta: "Nivel de gobierno", tipo: "text", placeholder: "cantonal | provincial | parroquial_rural" },
+    { clave: "nivel_gobierno", etiqueta: "Nivel de gobierno", tipo: "text", placeholder: "cantonal | provincial | parroquial_rural | todos" },
     { clave: "jurisdiccion_dpa", etiqueta: "Jurisdicción DPA (opcional)", tipo: "text", placeholder: "0207" },
   ],
   plan_trabajo: [

@@ -38,6 +38,7 @@ from app.config.settings import settings
 from app.db.models import Candidatura, Documento
 from app.db.models.enums import EstadoDocumento, TipoDocumento
 from app.services import embeddings, sparse
+from app.services.corpus_validation import NIVEL_TODOS, NIVELES_GOBIERNO
 from app.services.qdrant_client import (
     ALIAS_CONTEXTO,
     ALIAS_MARCO_LEGAL,
@@ -302,7 +303,8 @@ def _payload(meta: dict, tipo: str, doc_id: str, texto: str, git_sha: str) -> di
         payload["candidatura_id"] = meta.get("candidatura_id")
         payload["jurisdiccion_dpa"] = meta.get("jurisdiccion_dpa")
     elif tipo == "marco_legal":
-        payload["nivel_gobierno"] = meta.get("nivel_gobierno")
+        nivel = meta.get("nivel_gobierno")
+        payload["nivel_gobierno"] = list(NIVELES_GOBIERNO) if nivel == NIVEL_TODOS else nivel
         payload["vigente"] = bool(meta.get("vigente", True))
     elif tipo == "contexto":
         payload["jurisdiccion_dpa"] = meta.get("jurisdiccion_dpa")
