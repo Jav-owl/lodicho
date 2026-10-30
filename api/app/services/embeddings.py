@@ -15,8 +15,11 @@ No usar `gemini-embedding-2`: es multimodal y no soporta `task_type`.
 from __future__ import annotations
 
 import math
+import re
+import time
 
 from google import genai
+from google.genai import errors
 from google.genai import types
 
 from app.config.settings import settings
@@ -27,6 +30,9 @@ EMBEDDING_DIM = 768
 # La API de Gemini rechaza mas de 100 textos por llamada a embed_content; un
 # documento largo (p. ej. el COOTAD) genera cientos de chunks.
 MAX_TEXTOS_POR_LLAMADA = 100
+# El tier gratuito limita los tokens de embeddings por minuto (429); se espera
+# el retryDelay que indica la API y se reintenta el mismo lote.
+MAX_REINTENTOS_429 = 10
 
 TASK_TYPE_DOCUMENT ="RETRIEVAL_DOCUMENT"
 TASK_TYPE_QUERY = "RETRIEVAL_QUERY"
@@ -48,20 +54,31 @@ def _l2_normalize(vector: list[float]) -> list[float]:
     return [v / norm for v in vector]
 
 
+def _embed_lote(lote: list[str], task_type: str):
+    for intento in range(MAX_REINTENTOS_429 + 1):
+        try:
+            return _get_client().models.embed_content(
+                model=EMBEDDING_MODEL,
+                contents=lote,
+                config=types.EmbedContentConfig(
+                    task_type=task_type,
+                    output_dimensionality=EMBEDDING_DIM,
+                ),
+            )
+        except errors.ClientError as exc:
+            if exc.code != 429 or intento == MAX_REINTENTOS_429:
+                raise
+            espera = re.search(r"retry in ([\d.]+)s", str(exc))
+            time.sleep(float(espera.group(1)) + 1 if espera else 15)
+
+
 def _embed(texts: list[str], task_type: str) -> list[list[float]]:
     if not texts:
         return []
 
     vectores: list[list[float]] = []
     for i in range(0, len(texts), MAX_TEXTOS_POR_LLAMADA):
-        response = _get_client().models.embed_content(
-            model=EMBEDDING_MODEL,
-            contents=texts[i : i + MAX_TEXTOS_POR_LLAMADA],
-            config=types.EmbedContentConfig(
-                task_type=task_type,
-                output_dimensionality=EMBEDDING_DIM,
-            ),
-        )
+        response = _embed_lote(texts[i : i + MAX_TEXTOS_POR_LLAMADA], task_type)
         vectores.extend(_l2_normalize(embedding.values) for embedding in response.embeddings)
     return vectores
 

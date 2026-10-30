@@ -47,9 +47,13 @@ def commitear_y_pushear(corpus_path: Path, rutas_relativas: list[str], mensaje: 
         corpus_path,
     )
     if commit.returncode != 0:
-        raise GitCorpusError(f"git commit fallo: {commit.stderr.strip() or commit.stdout.strip()}")
+        salida = f"{commit.stdout}\n{commit.stderr}"
+        # Reintentar una confirmacion cuyo commit ya existe no es un error:
+        # el contenido ya esta en el historial; solo falta (re)pushear.
+        if "nothing to commit" not in salida and "nothing added to commit" not in salida:
+            raise GitCorpusError(f"git commit fallo: {commit.stderr.strip() or commit.stdout.strip()}")
 
-    sha = _run(["rev-parse", "HEAD"], corpus_path)
+    sha = _run(["log", "-1", "--format=%H", "--", *rutas_relativas], corpus_path)
     if sha.returncode != 0 or not sha.stdout.strip():
         raise GitCorpusError("no se pudo leer el git_sha del commit recien hecho")
     git_sha = sha.stdout.strip()

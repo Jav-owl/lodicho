@@ -418,7 +418,9 @@ def confirmar_borrador(borrador_id: str, session: Session = Depends(get_session)
     try:
         git_sha = corpus_git.commitear_y_pushear(corpus_path, rutas_relativas, mensaje_commit)
     except corpus_git.GitCorpusError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        # No 502: Cloudflare reemplaza el cuerpo de un 502 por su propia pagina
+        # HTML y el panel nunca vería el detalle del error de git.
+        raise HTTPException(status_code=424, detail=str(exc)) from exc
 
     if es_movimiento:
         delete_by_doc_id(ALIAS_POR_TIPO[b.tipo_original], b.doc_id_original)
