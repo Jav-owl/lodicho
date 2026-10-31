@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import shutil
 import tempfile
 import uuid
@@ -31,18 +32,20 @@ from sqlalchemy.orm import Session
 from app.config.settings import settings
 from app.db.models import Candidato, Candidatura, Documento
 from app.db.models.enums import EstadoPlanCandidatura
-from app.db.session import get_session
+from app.db.session import SessionLocal, get_session
 from app.services import admin_auth, corpus_git, corpus_validation, pdf_conversion
 from app.services.ingest import (
     ALIAS_POR_TIPO,
     DIR_POR_TIPO,
     IngestaError,
+    ResumenIngesta,
     ingestar_archivo,
     parsear_frontmatter,
 )
 from app.services.qdrant_client import delete_by_doc_id
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
+logger = logging.getLogger(__name__)
 
 
 # ---------- auth ----------
@@ -446,10 +449,57 @@ class IngestarResponse(BaseModel):
     n_chunks: int
 
 
+class IniciarIngestaResponse(BaseModel):
+    job_id: str
+
+
+class EstadoIngestaResponse(BaseModel):
+    estado: str  # "procesando" | "listo" | "error"
+    resultado: IngestarResponse | None = None
+    detalle: str | None = None
+
+
+# Igual que la conversion: con el tier gratuito de Gemini (30000 tokens/min) un
+# documento largo tarda varios minutos en indexarse y Cloudflare corta a ~100s
+# (524), asi que POST /ingestar devuelve un job_id y el front consulta
+# GET /ingestar/{job_id}. Estado en memoria de proceso, como los borradores.
+_jobs_ingesta: dict[str, dict[str, Any]] = {}
+_tareas_ingesta: set[asyncio.Task] = set()
+# Una ingesta a la vez: comparten la cuota de embeddings por minuto.
+_cupo_ingesta = asyncio.Semaphore(1)
+
+
+def _ingestar_en_hilo(archivo: Path, corpus_path: Path) -> ResumenIngesta:
+    # Sesion propia: la del request ya se cerro cuando el job sigue corriendo.
+    with SessionLocal() as session:
+        return ingestar_archivo(archivo, corpus_path, session)
+
+
+async def _ejecutar_ingesta(job_id: str, archivo: Path, corpus_path: Path) -> None:
+    try:
+        async with _cupo_ingesta:
+            resumen = await asyncio.to_thread(_ingestar_en_hilo, archivo, corpus_path)
+    except IngestaError as exc:
+        _jobs_ingesta[job_id] = {"estado": "error", "detalle": str(exc)}
+    except Exception as exc:  # noqa: BLE001 — cualquier fallo se reporta al front por el job
+        logger.exception("Fallo inesperado ingestando %s", archivo)
+        _jobs_ingesta[job_id] = {"estado": "error", "detalle": f"Falló la ingesta: {exc}"}
+    else:
+        _jobs_ingesta[job_id] = {
+            "estado": "listo",
+            "resultado": IngestarResponse(
+                doc_id=resumen.doc_id, tipo=resumen.tipo, git_sha=resumen.git_sha, n_chunks=resumen.n_chunks
+            ),
+        }
+
+
 @router.post(
-    "/documentos/{doc_id}/ingestar", response_model=IngestarResponse, dependencies=[Depends(requiere_admin)]
+    "/documentos/{doc_id}/ingestar",
+    response_model=IniciarIngestaResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(requiere_admin)],
 )
-def ingestar_documento(doc_id: str, session: Session = Depends(get_session)) -> IngestarResponse:
+async def ingestar_documento(doc_id: str) -> IniciarIngestaResponse:
     corpus_path = Path(settings.corpus_path)
     archivo = None
     for carpeta in DIR_POR_TIPO.values():
@@ -461,14 +511,29 @@ def ingestar_documento(doc_id: str, session: Session = Depends(get_session)) -> 
     if archivo is None:
         raise HTTPException(status_code=404, detail=f"No se encontró {doc_id}.md en el corpus")
 
-    try:
-        resumen = ingestar_archivo(archivo, corpus_path, session)
-    except IngestaError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    job_id = str(uuid.uuid4())
+    _jobs_ingesta[job_id] = {"estado": "procesando"}
+    tarea = asyncio.create_task(_ejecutar_ingesta(job_id, archivo, corpus_path))
+    _tareas_ingesta.add(tarea)
+    tarea.add_done_callback(_tareas_ingesta.discard)
 
-    return IngestarResponse(
-        doc_id=resumen.doc_id, tipo=resumen.tipo, git_sha=resumen.git_sha, n_chunks=resumen.n_chunks
-    )
+    return IniciarIngestaResponse(job_id=job_id)
+
+
+@router.get(
+    "/documentos/ingestar/{job_id}",
+    response_model=EstadoIngestaResponse,
+    dependencies=[Depends(requiere_admin)],
+)
+async def estado_ingesta(job_id: str) -> EstadoIngestaResponse:
+    job = _jobs_ingesta.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Ingesta no encontrada (¿el servidor se reinició?)")
+    if job["estado"] == "listo":
+        return EstadoIngestaResponse(estado="listo", resultado=job["resultado"])
+    if job["estado"] == "error":
+        return EstadoIngestaResponse(estado="error", detalle=job["detalle"])
+    return EstadoIngestaResponse(estado="procesando")
 
 
 class DocumentoResumen(BaseModel):

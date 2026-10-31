@@ -128,8 +128,23 @@ export function descartarBorrador(id) {
   return llamar(`/documentos/borradores/${id}`, { method: "DELETE" });
 }
 
-export function ingestarDocumento(docId) {
-  return llamar(`/documentos/${encodeURIComponent(docId)}/ingestar`, { method: "POST" });
+// Igual que convertir: con el tier gratuito de Gemini un documento largo tarda
+// varios minutos en indexarse, y Cloudflare corta a ~100s (524). El POST solo
+// inicia el trabajo y aca se consulta su estado.
+const INGESTA_POLL_MS = 3000;
+const INGESTA_MAX_MS = 30 * 60 * 1000;
+
+export async function ingestarDocumento(docId) {
+  const { job_id } = await llamar(`/documentos/${encodeURIComponent(docId)}/ingestar`, { method: "POST" });
+
+  const inicio = Date.now();
+  while (Date.now() - inicio < INGESTA_MAX_MS) {
+    await new Promise((resolver) => setTimeout(resolver, INGESTA_POLL_MS));
+    const estado = await llamar(`/documentos/ingestar/${job_id}`);
+    if (estado.estado === "listo") return estado.resultado;
+    if (estado.estado === "error") throw new ErrorAPI(estado.detalle || "No se pudo indexar el documento.");
+  }
+  throw new ErrorAPI("La indexación tarda demasiado. Revisa el servidor e inténtalo de nuevo.");
 }
 
 export function listarDocumentos() {
