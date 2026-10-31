@@ -30,8 +30,13 @@ EMBEDDING_DIM = 768
 # La API de Gemini rechaza mas de 100 textos por llamada a embed_content; un
 # documento largo (p. ej. el COOTAD) genera cientos de chunks.
 MAX_TEXTOS_POR_LLAMADA = 100
-# El tier gratuito limita los tokens de embeddings por minuto (429); se espera
-# el retryDelay que indica la API y se reintenta el mismo lote.
+# El tier gratuito limita los tokens de embeddings por minuto (30000). Una sola
+# llamada mayor que esa cuota jamas pasa, por mas que se espere: los lotes se
+# arman por presupuesto de tokens (estimado, sin tokenizer local; se asume un
+# token cada 3 caracteres para quedar del lado seguro) ademas del tope de textos.
+MAX_TOKENS_POR_LLAMADA = 15000
+CHARS_POR_TOKEN_ESTIMADO = 3
+# Ante un 429 se espera el retryDelay que indica la API y se reintenta el lote.
 MAX_REINTENTOS_429 = 10
 
 TASK_TYPE_DOCUMENT ="RETRIEVAL_DOCUMENT"
@@ -52,6 +57,22 @@ def _l2_normalize(vector: list[float]) -> list[float]:
     if norm == 0.0:
         return vector
     return [v / norm for v in vector]
+
+
+def _armar_lotes(texts: list[str]) -> list[list[str]]:
+    limite_chars = MAX_TOKENS_POR_LLAMADA * CHARS_POR_TOKEN_ESTIMADO
+    lotes: list[list[str]] = []
+    actual: list[str] = []
+    chars_actual = 0
+    for texto in texts:
+        if actual and (len(actual) >= MAX_TEXTOS_POR_LLAMADA or chars_actual + len(texto) > limite_chars):
+            lotes.append(actual)
+            actual, chars_actual = [], 0
+        actual.append(texto)
+        chars_actual += len(texto)
+    if actual:
+        lotes.append(actual)
+    return lotes
 
 
 def _embed_lote(lote: list[str], task_type: str):
@@ -77,8 +98,8 @@ def _embed(texts: list[str], task_type: str) -> list[list[float]]:
         return []
 
     vectores: list[list[float]] = []
-    for i in range(0, len(texts), MAX_TEXTOS_POR_LLAMADA):
-        response = _embed_lote(texts[i : i + MAX_TEXTOS_POR_LLAMADA], task_type)
+    for lote in _armar_lotes(texts):
+        response = _embed_lote(lote, task_type)
         vectores.extend(_l2_normalize(embedding.values) for embedding in response.embeddings)
     return vectores
 
