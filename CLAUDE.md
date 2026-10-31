@@ -39,7 +39,9 @@ vacía en vez de fallar; hay que clonarlo a mano.
 - **Jobs:** ARQ + Redis
 - **Relacional:** PostgreSQL 16 + Alembic
 - **Vectorial:** Qdrant (denso + sparse, vectores nombrados)
-- **Embeddings:** Gemini `gemini-embedding-001`, 768 dim
+- **Embeddings:** proveedor intercambiable por `EMBEDDING_PROVIDER`; **producción usa OpenAI
+  `text-embedding-3-small` a 768 dim** (Gemini `gemini-embedding-001`, 768 dim, es la
+  alternativa; ver `services/embeddings.py` y los gotchas)
 - **Sparse:** FastEmbed `Qdrant/bm25` (local, sin costo de API)
 - **Generación:** Gemini 2.5 Flash (clasificación, transcripción) / 2.5 Pro (veredictos)
 - **Ingesta:** n8n (solo webhook + delta; el procesamiento va en Python) — planeado, no
@@ -382,6 +384,11 @@ del checkout).
   a reindexar todo el corpus** (`make ingest` sin argumentos): vectores de modelos distintos no
   son comparables y la búsqueda degrada en silencio. Cada punto guarda `embedding_modelo`. Tras
   editar el `.env`, `docker compose up -d --force-recreate api worker` (`restart` no relee el `.env`).
+  **Estado actual (2026-10-31): producción corre con `EMBEDDING_PROVIDER=openai`**; el corpus
+  completo se reindexó con ese modelo (1063 puntos, todos `openai:text-embedding-3-small:768`,
+  verificado con un scroll que cuenta `embedding_modelo`). Costo estimado ~US$0,02 por millón de
+  tokens (≈US$0,06 por 15 documentos tipo COOTAD); sin cupo diario. Si se vuelve a Gemini hay que
+  reindexar otra vez.
 - **Cloudflare reemplaza el cuerpo de un 502/504 por su página HTML**: el panel solo ve
   "El servidor respondió 502" y nunca el `detail`. Un error de la app con mensaje útil debe
   usar otro código (el fallo de git en `confirmar` responde 424).
@@ -628,19 +635,46 @@ confiar en el código y en `docker compose ps` antes que en este párrafo.
   endpoint ni consumidor; fusionar un PR en `lodicho-corpus` no reindexa nada.
 - Detección de `.md` eliminado del corpus (status `removed` en la tabla de estados de
   archivo) — sigue sin un flujo que lo detecte.
-- Contenido real en el corpus: ya hay dos casos confirmados en producción: una
-  ordenanza metropolitana de Quito, el COOTAD (`marco_legal`, `nivel_gobierno: todos`,
-  609 chunks, alcanzable con los tres niveles) y la Constitución (452 chunks, `todos`). Faltan los planes de trabajo. Todavía no
-  se probó una consulta real de punta a punta que traiga artículos del COOTAD como
-  evidencia.
+- Contenido real en el corpus: tres documentos confirmados en producción, indexados con
+  OpenAI: una ordenanza metropolitana de Quito (2 chunks), el COOTAD (`marco_legal`,
+  `nivel_gobierno: todos`, 609 chunks) y la Constitución (452 chunks, `todos`). La recuperación
+  se probó por script ("vialidad y tránsito" trae Arts. 129, 130 y 55 del COOTAD para
+  `cantonal` y `provincial`). Faltan los planes de trabajo y más normas (se cargan por el
+  panel). Todavía no se probó una consulta real de punta a punta con una candidatura.
+- **Competencias por nivel (pendiente de diseño).** Con `nivel_gobierno: todos` el COOTAD
+  entero sale igual para `cantonal` y `provincial`: la búsqueda del nivel provincial puede
+  traer el Art. 55 (competencias municipales) en vez del Art. 42 (provinciales), y solo manda
+  la similitud semántica. Afecta al veredicto `fuera_de_competencia`. Dos salidas: (a) que el
+  chunker asigne `nivel_gobierno` por artículo según el título/capítulo del COOTAD
+  (más preciso, exige conocer su estructura), o (b) que el prompt del veredicto reciba el nivel
+  de la candidatura y cite solo artículos de ese nivel (más barato, depende del modelo). Decidir
+  al probar la primera consulta de punta a punta.
+- **Lista de candidatos y desambiguación (analizado, sin implementar).** Hoy `/consulta`
+  extrae solo el nombre (Gemini), lo busca por subcadena en Python y, si no hay exactamente un
+  resultado, emite el evento `candidatura` con opciones (`id`, `nombre`, `dignidad`,
+  `organizacion`); el alta es manual, de a uno. Falta: (1) opciones que distingan homónimos
+  (añadir `lista_numero`, período y jurisdicción legible); (2) tabla `jurisdicciones` con
+  los nombres del INEC (`jurisdiccion_dpa` es solo un código); (3) extraer también
+  partido/cantón/provincia/dignidad de la consulta y prefiltrar antes de preguntar;
+  (4) matching en SQL con `nombre_normalizado` indexado y ranking (exacto > todos los
+  tokens > apellido), porque traer todos los candidatos del país por consulta no escala;
+  (5) separar "sin coincidencias" de "ambiguo"; (6) importación masiva por CSV desde el panel
+  (validación + vista previa + carga idempotente por dignidad+jurisdicción+lista+período).
+  Principio: si hay más de un candidato posible el sistema siempre pregunta, con texto armado
+  por el código, nunca adivina (regla crítica 1). Plan por fases: **F1** opciones
+  enriquecidas + extracción de pistas + prefiltro + separar estados; **F2** catálogo de
+  jurisdicciones; **F3** importación CSV; **F4** selectores en cascada en el front (cierra el
+  pendiente del fallback en cascada). Bloqueado por dos datos del usuario: de dónde saldrá la
+  lista oficial (¿registro del CNE? formato por ver) y si el alcance es todo el país o un piloto.
 - El chunker de `marco_legal` descarta el texto previo al primer `Artículo N`
   (considerandos); si importan para consulta, hay que indexarlos aparte.
 - Set de evaluación de 25–30 afirmaciones anotadas a mano — no existe.
 
-**Siguiente paso lógico:** cargar el COOTAD real y al menos un plan de trabajo vía el
-panel de admin como primer caso de punta a punta con contenido real, y en paralelo
-cerrar la revisión editorial (sin eso ningún veredicto puede publicarse legalmente) y
-el tool call de indicadores (regla crítica 3).
+**Siguiente paso lógico:** cargar el resto de normas y al menos un plan de trabajo vía el
+panel de admin (ya con OpenAI, sin cupo diario) como primer caso de punta a punta con
+contenido real; arrancar la Fase 1 de la lista de candidatos (ver arriba) en cuanto el
+usuario defina la fuente y el alcance; y en paralelo cerrar la revisión editorial (sin eso
+ningún veredicto puede publicarse legalmente) y el tool call de indicadores (regla crítica 3).
 
 ---
 
