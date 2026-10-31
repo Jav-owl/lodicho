@@ -127,7 +127,8 @@ def test_openai_devuelve_vectores_normalizados_y_en_orden(monkeypatch):
 
     result = embeddings.embed_documents(["a", "b"])
 
-    assert result == pytest.approx([[0.6, 0.8], [0.0, 1.0]])
+    assert result[0] == pytest.approx([0.6, 0.8])
+    assert result[1] == pytest.approx([0.0, 1.0])
     assert llamadas[0]["dimensions"] == embeddings.EMBEDDING_DIM
     assert llamadas[0]["input"] == ["a", "b"]
 
