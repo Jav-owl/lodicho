@@ -286,8 +286,11 @@ iguales en los dos lugares.
 Matices implementados: un artículo de `marco_legal` que supera 1500 tokens **no es
 error**: el chunker lo subdivide (párrafo → fila de tabla → oración) sin recortar texto y
 el validador solo avisa. Sí es error un `nivel_gobierno` fuera de `provincial` /
-`cantonal` / `parroquial_rural` (`DIGNIDAD_A_NIVEL_GOBIERNO`): la recuperación filtra por
-coincidencia exacta y otro valor deja el documento indexado pero inalcanzable.
+`cantonal` / `parroquial_rural` (`DIGNIDAD_A_NIVEL_GOBIERNO`) o `todos`: la recuperación
+filtra por coincidencia exacta y otro valor deja el documento indexado pero inalcanzable.
+Una norma que rige a todos los niveles (el COOTAD) lleva `nivel_gobierno: todos`; al
+ingestar el payload guarda la lista de los tres niveles, y el `MatchValue` de Qdrant
+coincide si cualquier elemento de la lista es igual, así que `search_marco_legal` no cambia.
 
 **Conversión:** Docling, corriendo del lado del servidor dentro del panel de admin
 (`api/app/services/pdf_conversion.py`). Reservar LLM solo para escaneados — no
@@ -314,8 +317,9 @@ por vez, y el frontend consulta `GET .../convertir/{job_id}` cada 3 s hasta `lis
 `error`) → revisar/editar el Markdown y completar el
 frontmatter en pantalla → `.../borradores/{id}/validar` (mismas reglas que el Camino A)
 → `.../borradores/{id}/confirmar` (escribe el `.md` + PDF al corpus, commit + push
-automático) → botón "Ingestar" (`.../documentos/{doc_id}/ingestar`, mismo código que
-`make ingest`). Sección "Documentos" del panel: `GET /api/v1/admin/documentos` lista lo
+automático) → botón "Ingestar" (`POST .../documentos/{doc_id}/ingestar` responde 202 con
+un `job_id` y el front consulta `GET .../documentos/ingestar/{job_id}` cada 3 s; una
+ingesta a la vez; mismo código que `make ingest`). Sección "Documentos" del panel: `GET /api/v1/admin/documentos` lista lo
 que ya está en Postgres, con botón de reingestar por fila.
 
 Los borradores viven **en memoria del proceso** (no en Postgres) — se pierden si el
@@ -358,10 +362,30 @@ del checkout).
 - **Cloudflare corta cualquier petición a ~100 s (error 524)**, y subir el
   `proxy_read_timeout` de nginx no ayuda. Por eso la conversión es asíncrona (job + polling):
   nunca volver a una petición que espere el resultado de Docling.
-- **Los jobs y borradores del panel viven en memoria del proceso `api`**: un deploy que lo
+- **Los jobs (conversión e ingesta) y borradores del panel viven en memoria del proceso `api`**: un deploy que lo
   recree los pierde. No desplegar mientras alguien revisa un documento.
 - **Límite de CPU:** `api` lleva `cpus: 4` en producción (VPS compartido; Docling llegó a
   ~9 núcleos). `docker stats` puede marcar más de 400 %; medir con `cpu.stat` del cgroup.
+- **Embeddings de Gemini: 100 textos y 30 000 tokens/min (tier gratuito) por llamada.**
+  Más de 100 textos da 400 y superar la cuota por minuto da 429; `services/embeddings.py`
+  arma los lotes por presupuesto de tokens y reintenta los 429 esperando el `retryDelay`.
+  El COOTAD (609 chunks) tarda ~6 min con el tier gratuito. Por eso la ingesta del panel
+  es asíncrona (job + polling, como la conversión): nunca volver a una petición que espere
+  la indexación, Cloudflare corta a ~100 s (524). Con facturación activada tarda segundos.
+- **Cloudflare reemplaza el cuerpo de un 502/504 por su página HTML**: el panel solo ve
+  "El servidor respondió 502" y nunca el `detail`. Un error de la app con mensaje útil debe
+  usar otro código (el fallo de git en `confirmar` responde 424).
+- **Git del corpus desde el host:** `.git` de `~/docker/lodicho-corpus` puede no ser
+  escribible por el usuario del host (lo escribe el contenedor), el host no tiene identidad
+  de git y su llave de `origin` es de solo lectura. Para commitear/pushear a mano usar el
+  contenedor: `docker compose exec api git -C /corpus -c user.name=... -c user.email=... commit`
+  y push con `GIT_SSH_COMMAND="ssh -i /run/secrets/corpus_deploy_key -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes"`
+  hacia `$CORPUS_GIT_REMOTE`. Ese push no actualiza `origin/main` local: el "ahead N" del
+  `git status` es engañoso, comparar con `git ls-remote`.
+- **`docker compose exec` con heredoc necesita `-T`** (sin TTY), si no falla con "cannot
+  attach stdin to a TTY-enabled container".
+- **Repetir "Confirmar" sobre un borrador ya commiteado no falla**: `commitear_y_pushear`
+  trata "nothing to commit" como éxito y devuelve el SHA del último commit de esos archivos.
 
 ---
 
@@ -594,11 +618,11 @@ confiar en el código y en `docker compose ps` antes que en este párrafo.
   endpoint ni consumidor; fusionar un PR en `lodicho-corpus` no reindexa nada.
 - Detección de `.md` eliminado del corpus (status `removed` en la tabla de estados de
   archivo) — sigue sin un flujo que lo detecte.
-- Contenido real en el corpus: ya hay un primer caso de punta a punta confirmado en
-  producción (una ordenanza metropolitana de Quito, `marco_legal`: PDF → Docling →
-  commit al corpus → Qdrant). Faltan el COOTAD y los planes de trabajo. Ojo: un
-  documento aplicable a todos los niveles no se puede etiquetar con un solo
-  `nivel_gobierno` (el filtro es exacto); resolverlo antes de cargar el COOTAD.
+- Contenido real en el corpus: ya hay dos casos confirmados en producción: una
+  ordenanza metropolitana de Quito y el COOTAD (`marco_legal`, `nivel_gobierno: todos`,
+  609 chunks, alcanzable con los tres niveles). Faltan los planes de trabajo. Todavía no
+  se probó una consulta real de punta a punta que traiga artículos del COOTAD como
+  evidencia.
 - El chunker de `marco_legal` descarta el texto previo al primer `Artículo N`
   (considerandos); si importan para consulta, hay que indexarlos aparte.
 - Set de evaluación de 25–30 afirmaciones anotadas a mano — no existe.
