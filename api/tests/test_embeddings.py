@@ -93,3 +93,79 @@ def test_embed_documents_empty_input_skips_api_call(monkeypatch):
     monkeypatch.setattr(embeddings, "_get_client", _fail_if_called)
 
     assert embeddings.embed_documents([]) == []
+
+
+# --- Proveedor OpenAI -------------------------------------------------------
+
+
+class _FakeHttpResponse:
+    def __init__(self, status_code: int, data: list[list[float]] | None = None, text: str = "") -> None:
+        self.status_code = status_code
+        self._data = data or []
+        self.text = text
+        self.headers: dict[str, str] = {}
+
+    def json(self) -> dict:
+        # Fuera de orden a proposito: el modulo debe reordenar por `index`.
+        return {"data": [{"index": i, "embedding": v} for i, v in reversed(list(enumerate(self._data)))]}
+
+
+def _usar_openai(monkeypatch) -> None:
+    monkeypatch.setattr(embeddings.settings, "embedding_provider", "openai")
+    monkeypatch.setattr(embeddings.settings, "openai_api_key", "sk-falsa")
+
+
+def test_openai_devuelve_vectores_normalizados_y_en_orden(monkeypatch):
+    _usar_openai(monkeypatch)
+    llamadas: list[dict] = []
+
+    def _post(url, *, headers, json, timeout):
+        llamadas.append(json)
+        return _FakeHttpResponse(200, [[3.0, 4.0], [0.0, 2.0]])
+
+    monkeypatch.setattr(embeddings.httpx, "post", _post)
+
+    result = embeddings.embed_documents(["a", "b"])
+
+    assert result == pytest.approx([[0.6, 0.8], [0.0, 1.0]])
+    assert llamadas[0]["dimensions"] == embeddings.EMBEDDING_DIM
+    assert llamadas[0]["input"] == ["a", "b"]
+
+
+def test_openai_sin_credito_falla_sin_reintentar(monkeypatch):
+    _usar_openai(monkeypatch)
+    intentos: list[int] = []
+
+    def _post(*args, **kwargs):
+        intentos.append(1)
+        return _FakeHttpResponse(429, text='{"error": {"code": "insufficient_quota"}}')
+
+    monkeypatch.setattr(embeddings.httpx, "post", _post)
+
+    with pytest.raises(RuntimeError, match="insufficient_quota"):
+        embeddings.embed_query("hola")
+    assert len(intentos) == 1
+
+
+def test_openai_reintenta_un_429_transitorio(monkeypatch):
+    _usar_openai(monkeypatch)
+    monkeypatch.setattr(embeddings.time, "sleep", lambda s: None)
+    respuestas = [_FakeHttpResponse(429, text="rate limit"), _FakeHttpResponse(200, [[1.0, 0.0]])]
+    monkeypatch.setattr(embeddings.httpx, "post", lambda *a, **k: respuestas.pop(0))
+
+    assert embeddings.embed_query("hola") == [1.0, 0.0]
+
+
+def test_proveedor_invalido_se_rechaza(monkeypatch):
+    monkeypatch.setattr(embeddings.settings, "embedding_provider", "otro")
+
+    with pytest.raises(ValueError, match="EMBEDDING_PROVIDER"):
+        embeddings.proveedor_activo()
+
+
+def test_modelo_activo_identifica_proveedor_y_dimension(monkeypatch):
+    monkeypatch.setattr(embeddings.settings, "embedding_provider", "gemini")
+    assert embeddings.modelo_activo() == "gemini:gemini-embedding-001:768"
+
+    monkeypatch.setattr(embeddings.settings, "embedding_provider", "openai")
+    assert embeddings.modelo_activo() == "openai:text-embedding-3-small:768"

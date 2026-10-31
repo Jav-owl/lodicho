@@ -307,6 +307,7 @@ def _payload(meta: dict, tipo: str, doc_id: str, texto: str, git_sha: str) -> di
         "git_sha": git_sha,
         "tipo": tipo,
         "fuente_url": meta.get("fuente_url"),
+        "embedding_modelo": embeddings.modelo_activo(),
     }
     if tipo == "plan_trabajo":
         payload["candidatura_id"] = meta.get("candidatura_id")

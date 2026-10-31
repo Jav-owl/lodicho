@@ -372,6 +372,16 @@ del checkout).
   El COOTAD (609 chunks) tarda ~6 min con el tier gratuito. Por eso la ingesta del panel
   es asíncrona (job + polling, como la conversión): nunca volver a una petición que espere
   la indexación, Cloudflare corta a ~100 s (524). Con facturación activada tarda segundos.
+- **Gemini gratuito: además hay un cupo diario de 1000 textos** (`embed_content_free_tier_requests`,
+  429 con "per day"; cada chunk cuenta como una solicitud). Equivale a ~1 documento tipo COOTAD
+  (609 chunks) o Constitución (452) por día. La ingesta calcula todos los embeddings antes del
+  upsert, así que un intento que se agota a mitad **gasta cupo y no guarda nada**: no relanzar
+  a ciegas. Probar cupo con una sola `embed_query` antes de un lote grande.
+- **Proveedor de embeddings intercambiable** (`EMBEDDING_PROVIDER=gemini|openai`, ver
+  `services/embeddings.py`). OpenAI usa `text-embedding-3-small` a 768 dim. **Cambiarlo obliga
+  a reindexar todo el corpus** (`make ingest` sin argumentos): vectores de modelos distintos no
+  son comparables y la búsqueda degrada en silencio. Cada punto guarda `embedding_modelo`. Tras
+  editar el `.env`, `docker compose up -d --force-recreate api worker` (`restart` no relee el `.env`).
 - **Cloudflare reemplaza el cuerpo de un 502/504 por su página HTML**: el panel solo ve
   "El servidor respondió 502" y nunca el `detail`. Un error de la app con mensaje útil debe
   usar otro código (el fallo de git en `confirmar` responde 424).
@@ -619,8 +629,8 @@ confiar en el código y en `docker compose ps` antes que en este párrafo.
 - Detección de `.md` eliminado del corpus (status `removed` en la tabla de estados de
   archivo) — sigue sin un flujo que lo detecte.
 - Contenido real en el corpus: ya hay dos casos confirmados en producción: una
-  ordenanza metropolitana de Quito y el COOTAD (`marco_legal`, `nivel_gobierno: todos`,
-  609 chunks, alcanzable con los tres niveles). Faltan los planes de trabajo. Todavía no
+  ordenanza metropolitana de Quito, el COOTAD (`marco_legal`, `nivel_gobierno: todos`,
+  609 chunks, alcanzable con los tres niveles) y la Constitución (452 chunks, `todos`). Faltan los planes de trabajo. Todavía no
   se probó una consulta real de punta a punta que traiga artículos del COOTAD como
   evidencia.
 - El chunker de `marco_legal` descarta el texto previo al primer `Artículo N`

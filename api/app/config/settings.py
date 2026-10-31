@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     # --- Gemini ---
     gemini_api_key: str = ""
 
+    # --- Embeddings: proveedor activo ("gemini" | "openai") ---
+    # Cambiarlo obliga a reindexar todo el corpus (ver services/embeddings.py).
+    embedding_provider: str = "gemini"
+    openai_api_key: str = ""
+    openai_embedding_model: str = "text-embedding-3-small"
+
     # --- Ingesta (n8n / GitHub webhook) ---
     github_webhook_secret: str = ""
     ingest_api_token: str = ""

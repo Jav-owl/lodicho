@@ -1,4 +1,11 @@
-"""Embeddings densos (Gemini `gemini-embedding-001`, 768 dim).
+"""Embeddings densos (Gemini `gemini-embedding-001` u OpenAI, 768 dim).
+
+El proveedor se elige con `EMBEDDING_PROVIDER` (`gemini` por defecto, u `openai`).
+El resto de la app solo llama a `embed_documents` / `embed_query`; nunca importa
+un SDK de proveedor. **Cambiar de proveedor obliga a reindexar todo el corpus**:
+vectores de modelos distintos no son comparables entre si, aunque tengan la misma
+dimension, y la busqueda devolveria basura sin lanzar ningun error. Cada punto
+guarda `embedding_modelo` (ver `modelo_activo`) para poder detectar la mezcla.
 
 Dos errores silenciosos documentados en CLAUDE.md que este modulo existe
 para evitar:
@@ -18,6 +25,7 @@ import math
 import re
 import time
 
+import httpx
 from google import genai
 from google.genai import errors
 from google.genai import types
@@ -39,6 +47,16 @@ CHARS_POR_TOKEN_ESTIMADO = 3
 # Ante un 429 se espera el retryDelay que indica la API y se reintenta el lote.
 MAX_REINTENTOS_429 = 10
 
+# OpenAI: sin task type (modelo simetrico). `dimensions` recorta el vector a 768 para
+# calzar con las colecciones de Qdrant. Limite real: 2048 textos y 300k tokens por
+# llamada; se usa un margen amplio, no hay cuota por minuto que cuidar.
+PROVEEDORES = ("gemini", "openai")
+OPENAI_URL = "https://api.openai.com/v1/embeddings"
+OPENAI_MAX_TEXTOS_POR_LLAMADA = 100
+OPENAI_MAX_TOKENS_POR_LLAMADA = 100000
+OPENAI_MAX_REINTENTOS = 5
+OPENAI_TIMEOUT_S = 60
+
 TASK_TYPE_DOCUMENT ="RETRIEVAL_DOCUMENT"
 TASK_TYPE_QUERY = "RETRIEVAL_QUERY"
 
@@ -59,13 +77,32 @@ def _l2_normalize(vector: list[float]) -> list[float]:
     return [v / norm for v in vector]
 
 
-def _armar_lotes(texts: list[str]) -> list[list[str]]:
-    limite_chars = MAX_TOKENS_POR_LLAMADA * CHARS_POR_TOKEN_ESTIMADO
+def proveedor_activo() -> str:
+    proveedor = settings.embedding_provider.strip().lower()
+    if proveedor not in PROVEEDORES:
+        raise ValueError(
+            f"EMBEDDING_PROVIDER={settings.embedding_provider!r} no es valido; usa uno de {PROVEEDORES}"
+        )
+    return proveedor
+
+
+def modelo_activo() -> str:
+    """Identificador `proveedor:modelo:dim` que se guarda en el payload de cada punto."""
+    modelo = settings.openai_embedding_model if proveedor_activo() == "openai" else EMBEDDING_MODEL
+    return f"{proveedor_activo()}:{modelo}:{EMBEDDING_DIM}"
+
+
+def _armar_lotes(
+    texts: list[str],
+    max_textos: int = MAX_TEXTOS_POR_LLAMADA,
+    max_tokens: int = MAX_TOKENS_POR_LLAMADA,
+) -> list[list[str]]:
+    limite_chars = max_tokens * CHARS_POR_TOKEN_ESTIMADO
     lotes: list[list[str]] = []
     actual: list[str] = []
     chars_actual = 0
     for texto in texts:
-        if actual and (len(actual) >= MAX_TEXTOS_POR_LLAMADA or chars_actual + len(texto) > limite_chars):
+        if actual and (len(actual) >= max_textos or chars_actual + len(texto) > limite_chars):
             lotes.append(actual)
             actual, chars_actual = [], 0
         actual.append(texto)
@@ -93,15 +130,56 @@ def _embed_lote(lote: list[str], task_type: str):
             time.sleep(float(espera.group(1)) + 1 if espera else 15)
 
 
-def _embed(texts: list[str], task_type: str) -> list[list[float]]:
-    if not texts:
-        return []
+def _embed_openai_lote(lote: list[str]) -> list[list[float]]:
+    if not settings.openai_api_key:
+        raise RuntimeError("falta OPENAI_API_KEY (EMBEDDING_PROVIDER=openai)")
+    for intento in range(OPENAI_MAX_REINTENTOS + 1):
+        respuesta = httpx.post(
+            OPENAI_URL,
+            headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+            json={
+                "model": settings.openai_embedding_model,
+                "input": lote,
+                "dimensions": EMBEDDING_DIM,
+                "encoding_format": "float",
+            },
+            timeout=OPENAI_TIMEOUT_S,
+        )
+        if respuesta.status_code == 200:
+            datos = sorted(respuesta.json()["data"], key=lambda d: d["index"])
+            return [d["embedding"] for d in datos]
+        # Sin credito no sirve reintentar: se corta con un mensaje claro.
+        if "insufficient_quota" in respuesta.text:
+            raise RuntimeError(f"OpenAI sin credito disponible (insufficient_quota): {respuesta.text}")
+        reintentable = respuesta.status_code == 429 or respuesta.status_code >= 500
+        if not reintentable or intento == OPENAI_MAX_REINTENTOS:
+            raise RuntimeError(f"OpenAI embeddings fallo ({respuesta.status_code}): {respuesta.text}")
+        espera = respuesta.headers.get("retry-after")
+        time.sleep(float(espera) if espera and espera.replace(".", "", 1).isdigit() else 2**intento)
+    raise AssertionError("inalcanzable")
 
+
+def _embed_openai(texts: list[str]) -> list[list[float]]:
+    vectores: list[list[float]] = []
+    for lote in _armar_lotes(texts, OPENAI_MAX_TEXTOS_POR_LLAMADA, OPENAI_MAX_TOKENS_POR_LLAMADA):
+        vectores.extend(_l2_normalize(v) for v in _embed_openai_lote(lote))
+    return vectores
+
+
+def _embed_gemini(texts: list[str], task_type: str) -> list[list[float]]:
     vectores: list[list[float]] = []
     for lote in _armar_lotes(texts):
         response = _embed_lote(lote, task_type)
         vectores.extend(_l2_normalize(embedding.values) for embedding in response.embeddings)
     return vectores
+
+
+def _embed(texts: list[str], task_type: str) -> list[list[float]]:
+    if not texts:
+        return []
+    if proveedor_activo() == "openai":
+        return _embed_openai(texts)
+    return _embed_gemini(texts, task_type)
 
 
 def embed_documents(texts: list[str]) -> list[list[float]]:
