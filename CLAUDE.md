@@ -119,7 +119,8 @@ de inyección de prompt.
 
 ```
 candidaturas (id, organizacion_politica, lista_numero, dignidad,
-              jurisdiccion_dpa, periodo, doc_id_plan, estado_plan)
+              jurisdiccion_dpa, periodo, doc_id_plan, estado_plan,
+              estado_candidatura)
      │
      └──< candidatos (id, nombre, candidatura_id FK, posicion_lista)
 
@@ -143,6 +144,9 @@ analisis     (id, candidatura_id FK, afirmacion, veredicto ENUM,
      └──< evidencias (id, analisis_id, paso, coleccion, point_id,
                       doc_id, texto, score, git_sha)
 ```
+
+`estado_candidatura`: `inscrito` → `oficializado` (el CNE oficializa el 9 de noviembre de 2026; una
+carga nueva de la lista lo va actualizando). Distinto de `estado_plan` (si registró plan).
 
 **Clave:** el plan de trabajo pertenece a la **candidatura**, no a la persona. Varios
 candidatos de una misma lista comparten un solo plan. Un `.md` por candidatura.
@@ -327,6 +331,26 @@ que ya está en Postgres, con botón de reingestar por fila.
 Los borradores viven **en memoria del proceso** (no en Postgres) — se pierden si el
 contenedor `api` reinicia a mitad de una revisión, y no funciona corriendo más de un
 worker de uvicorn. Aceptable al volumen de este piloto.
+
+### Carga masiva de candidaturas (CSV)
+
+En la misma pantalla "Ingresar Documento", el selector «¿Qué va a cargar?» separa el corpus de la
+**lista de candidaturas (CSV)**: esta carga no toca Qdrant ni `documentos`. Una fila por candidato
+(plantilla en `web/plantillas/candidaturas-plantilla.csv`; las filas "EJEMPLO" se rechazan).
+`POST /api/v1/admin/candidaturas/importar` (`aplicar=false` = vista previa; `true` = guarda; el front
+sube el archivo dos veces, sin estado en el servidor). Reglas (`services/importacion_candidaturas.py`):
+- Idempotente: candidatura = (dignidad, jurisdiccion_dpa, lista_numero, periodo); candidato = nombre
+  normalizado dentro de ella. Recargar actualiza `estado_candidatura`, `estado_plan`, organización y
+  posición; no duplica ni borra (los candidatos que ya no vienen se conservan).
+- Todo o nada: un solo error impide escribir. Retroceder de oficializado a inscrito avisa, no bloquea.
+- Excel borra el cero inicial de `jurisdiccion_dpa` ("0207" → "207"): se completa por largo impar y se avisa.
+- Acepta directamente el formato del CNE (`docs/candidaturas_seccionales_*.csv`: `Candidato/a`, `Número de
+  lista`, `Estado CNE`, `Guayas (09)` → DPA `09`, `Prefectura`→prefecto, `Alcaldía`→alcalde,
+  `2027–2031`, «Aún sin oficializar»→inscrito). `estado_plan` y `posicion_lista` son opcionales: sin
+  `estado_plan` las candidaturas NUEVAS se crean `registrado` (con aviso; las existentes conservan el
+  suyo) y la posición se asigna por orden.
+- Acepta `,` `;` o tab y UTF-8 o cp1252. Tope 5 MB / 50 000 filas. `dignidad` debe estar en
+  `DIGNIDAD_A_NIVEL_GOBIERNO`.
 
 ### Deploy key SSH (commit automático a lodicho-corpus)
 
@@ -548,7 +572,9 @@ HTTPS) apuntando al backend de producción.
   `0.0.0.0`.
 - Qdrant y Postgres sin puertos publicados al host — solo red interna de Docker.
 - Rate limit agresivo por IP en endpoints públicos: la generación cuesta dinero.
-- Límite de 10 MB en subida de audio, validado antes de llamar a Gemini.
+- Límites de entrada (cuestan dinero): 1000 caracteres por consulta, audio de máx. 60 s (medido con
+  ffmpeg en el servidor) y 10 MB, validados antes de llamar a un modelo. Costos estimados en
+  `docs/costos-consultas.md`.
 - Targets de `Makefile`: `up` / `down` / `logs` / `migrate` / `shell` / `init-qdrant` /
   `init-letsencrypt` / `reload-nginx` / `ingest`. `make ingest ARGS=ruta.md` para un
   solo archivo, sin argumentos para todo el corpus.
@@ -574,7 +600,7 @@ confiar en el código y en `docker compose ps` antes que en este párrafo.
 - Panel de admin (`#/admin`): login, subir PDF, convertir con Docling, revisar,
   commit + push automático al corpus, ingestar a Qdrant, **y alta de candidaturas**
   (`POST /api/v1/admin/candidaturas`, pantalla "Registrar Nueva Candidatura" — ya no
-  hace falta SQL a mano). Sección "Documentos" lista lo ingestado. Sin un caso real de
+  hace falta SQL a mano) **y carga masiva por CSV** con vista previa y estado inscrito/oficializado. Sección "Documentos" lista lo ingestado. Sin un caso real de
   punta a punta confirmado en producción todavía (ver gotchas operativas).
 - `app/services/ingest.py` (chunk → embeddings → Qdrant → Postgres), compartido entre
   `make ingest` y el panel — probado con integración, sin contenido real en producción.
@@ -605,9 +631,11 @@ confiar en el código y en `docker compose ps` antes que en este párrafo.
   panel de admin. Enviar una consulta de texto real ya funciona de punta a punta.
 
 **No existe todavía:**
-- **Entrada por voz y por URL en `/api/v1/consulta`.** El composer ya graba/adjunta
-  audio y acepta URL, pero el backend las rechaza sin procesar — falta transcripción
-  Gemini, extracción/archivado de URL, y separación `cita_directa` / `parafrasis_periodistica`.
+- **Entrada por URL en `/api/v1/consulta`.** El composer acepta URL pero el backend la rechaza
+  — falta extracción/archivado y separación `cita_directa` / `parafrasis_periodistica`.
+  (La **voz sí funciona**: `POST /api/v1/transcribir` transcribe con OpenAI
+  `gpt-4o-mini-transcribe` (o con Gemini Flash si `TRANSCRIPTION_PROVIDER=gemini`), el texto vuelve al composer para revisarlo y se envía a `/consulta`
+  como `tipo_input=voz` + `audio_id`; el audio original queda en el volumen `/audio`.)
 - **Comparación factual** (contraste lado a lado entre candidatos) — la intención se
   clasifica pero el endpoint devuelve "no disponible todavía".
 - **Caché semántico** sobre `analisis_publicados` (paso 4 del pipeline) — cada consulta
@@ -658,8 +686,8 @@ confiar en el código y en `docker compose ps` antes que en este párrafo.
   partido/cantón/provincia/dignidad de la consulta y prefiltrar antes de preguntar;
   (4) matching en SQL con `nombre_normalizado` indexado y ranking (exacto > todos los
   tokens > apellido), porque traer todos los candidatos del país por consulta no escala;
-  (5) separar "sin coincidencias" de "ambiguo"; (6) importación masiva por CSV desde el panel
-  (validación + vista previa + carga idempotente por dignidad+jurisdicción+lista+período).
+  (5) separar "sin coincidencias" de "ambiguo"; (6) importación masiva por CSV desde el panel — **implementada** (ver "Carga masiva de
+  candidaturas"; falta el catálogo de jurisdicciones para validar el DPA contra el INEC).
   Principio: si hay más de un candidato posible el sistema siempre pregunta, con texto armado
   por el código, nunca adivina (regla crítica 1). Plan por fases: **F1** opciones
   enriquecidas + extracción de pistas + prefiltro + separar estados; **F2** catálogo de
