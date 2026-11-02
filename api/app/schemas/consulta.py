@@ -105,3 +105,10 @@ class ErrorEventData(BaseModel):
 
 class EstadoResponse(BaseModel):
     modo_silencio_electoral: bool
+
+
+class TranscripcionResponse(BaseModel):
+    audio_id: str
+    texto: str
+    duracion_s: float
+    costo_estimado_usd: float

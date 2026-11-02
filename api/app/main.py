@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config.settings import settings
-from app.routers import admin, candidaturas, consulta, veredicto
+from app.routers import admin, admin_candidaturas_csv, candidaturas, consulta, transcripcion, veredicto
 
 app = FastAPI(title="Lo Dicho API")
 
@@ -16,8 +16,10 @@ if settings.allowed_origins_list:
     )
 
 app.include_router(admin.router)
+app.include_router(admin_candidaturas_csv.router)
 app.include_router(candidaturas.router)
 app.include_router(consulta.router)
+app.include_router(transcripcion.router)
 app.include_router(veredicto.router)
 
 

@@ -5,6 +5,8 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     git \
+    # Mide la duracion real del audio subido/dictado (limite de costo).
+    ffmpeg \
     openssh-client \
     # Docling usa OpenCV para el analisis de layout de cada pagina, que
     # en Debian slim necesita estas libs graficas/X11 aunque no haya

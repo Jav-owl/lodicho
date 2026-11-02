@@ -45,6 +45,8 @@ services:
       # que el panel de admin pueda commitear + pushear sin que nadie
       # toque una terminal. Nunca la corriente/personal de nadie.
       - ./secrets/corpus_deploy_key:/run/secrets/corpus_deploy_key:ro
+      # Audio original de las consultas por voz (evidencia ante impugnacion).
+      - audio_data:/audio
     depends_on:
       - postgres
       - redis
@@ -100,5 +102,6 @@ networks:
     driver: bridge
 
 volumes:
+  audio_data:
   postgres_data:
   qdrant_data:

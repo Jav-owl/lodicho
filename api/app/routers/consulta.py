@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from typing import Generator, Literal
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, Form
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -48,6 +48,7 @@ from app.services.resolucion_candidatura import (
     nivel_gobierno_para_dignidad,
 )
 from app.services.sse import sse_event
+from app.routers.transcripcion import ruta_audio
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,11 @@ router = APIRouter(prefix="/api/v1", tags=["consulta"])
 MENSAJE_SILENCIO_ELECTORAL = (
     "Silencio electoral activo: solo se permite consultar informes ya publicados."
 )
-MENSAJE_ENTRADA_NO_SOPORTADA = "Esta version solo admite entrada de texto."
+MENSAJE_ENTRADA_NO_SOPORTADA = "Esta version solo admite entrada de texto o dictado."
+MENSAJE_AUDIO_NO_ENCONTRADO = "No se encontro el audio de la consulta. Graba o sube el audio de nuevo."
+MENSAJE_TEXTO_LARGO = (
+    "La consulta es demasiado larga ({n} caracteres). El maximo es {max}: resume la afirmacion."
+)
 MENSAJE_TEXTO_VACIO = "El texto de la consulta no puede estar vacio."
 MENSAJE_FALLO_CLASIFICACION = "No se pudo procesar la consulta. Intenta de nuevo."
 MENSAJE_COMPARACION_NO_DISPONIBLE = (
@@ -79,19 +84,22 @@ async def consulta(
     tipo_input: Literal["texto", "voz", "url"] = Form(...),
     texto: str | None = Form(None),
     url_fuente: str | None = Form(None),
-    audio: UploadFile | None = File(None),
+    audio_id: str | None = Form(None),
     candidatura_id: str | None = Form(None),
     session: Session = Depends(get_session),
 ) -> StreamingResponse:
     return StreamingResponse(
-        _generar_stream(tipo_input, texto, candidatura_id, session),
+        _generar_stream(tipo_input, texto, candidatura_id, session, audio_id),
         media_type="text/event-stream",
     )
 
 
-def _persistir_consulta(session: Session, texto: str, intencion: str) -> Declaracion:
+def _persistir_consulta(
+    session: Session, texto: str, intencion: str, audio_path: str | None = None
+) -> Declaracion:
     fila_consulta = Consulta(
-        tipo_input=TipoInput.texto,
+        tipo_input=TipoInput.voz if audio_path else TipoInput.texto,
+        audio_path=audio_path,
         texto=texto,
         intencion_detectada=intencion,
         desde_cache=False,
@@ -127,19 +135,37 @@ def _generar_stream(
     texto: str | None,
     candidatura_id_raw: str | None,
     session: Session,
+    audio_id: str | None = None,
 ) -> Generator[str, None, None]:
     try:
         if settings.modo_silencio_electoral:
             yield sse_event("rechazo", RechazoEventData(motivo=MENSAJE_SILENCIO_ELECTORAL))
             return
 
-        if tipo_input != "texto":
+        if tipo_input == "url":
             yield sse_event("error", ErrorEventData(detalle=MENSAJE_ENTRADA_NO_SOPORTADA))
             return
+        audio_path: str | None = None
+        if tipo_input == "voz":
+            archivo = ruta_audio(audio_id or "")
+            if archivo is None:
+                yield sse_event("error", ErrorEventData(detalle=MENSAJE_AUDIO_NO_ENCONTRADO))
+                return
+            audio_path = str(archivo)
         if not texto or not texto.strip():
             yield sse_event("error", ErrorEventData(detalle=MENSAJE_TEXTO_VACIO))
             return
         texto = texto.strip()
+        # Antes de cualquier llamada a un modelo: el texto largo (escrito, dictado o
+        # transcrito) cuesta tokens en clasificacion, extraccion y retrieval.
+        if len(texto) > settings.max_chars_consulta:
+            yield sse_event(
+                "error",
+                ErrorEventData(
+                    detalle=MENSAJE_TEXTO_LARGO.format(n=len(texto), max=settings.max_chars_consulta)
+                ),
+            )
+            return
 
         try:
             categoria = clasificar_intencion(texto)
@@ -149,7 +175,7 @@ def _generar_stream(
             return
 
         if categoria in CATEGORIAS_RECHAZADAS:
-            _persistir_consulta(session, texto, categoria.value)
+            _persistir_consulta(session, texto, categoria.value, audio_path)
             yield sse_event("rechazo", RechazoEventData(motivo=MENSAJES_RECHAZO[categoria]))
             return
 
@@ -237,7 +263,7 @@ def _generar_stream(
             return
 
         try:
-            declaracion = _persistir_consulta(session, texto, categoria.value)
+            declaracion = _persistir_consulta(session, texto, categoria.value, audio_path)
         except Exception:
             session.rollback()
             logger.exception("fallo al persistir Consulta/Declaracion")

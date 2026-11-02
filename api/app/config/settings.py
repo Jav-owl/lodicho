@@ -23,6 +23,21 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_embedding_model: str = "text-embedding-3-small"
 
+    # --- Limites de entrada (cada consulta cuesta dinero, ver docs/costos-consultas.md) ---
+    max_chars_consulta: int = 1000
+    audio_max_segundos: int = 60
+    audio_max_bytes: int = 10 * 1024 * 1024
+    audio_path: str = "/audio"  # volumen donde se archiva el audio original (evidencia)
+
+    # --- Transcripcion de audio: proveedor activo ("openai" | "gemini") ---
+    # Precios en USD por minuto de audio: ESTIMADOS, verificar contra las paginas de
+    # precios de cada proveedor antes de confiar en el costo que reporta la API.
+    # Gemini usa el modelo Flash de services/generacion.py.
+    transcription_provider: str = "openai"
+    openai_transcribe_model: str = "gpt-4o-mini-transcribe"
+    openai_transcribe_usd_por_min: float = 0.003
+    gemini_transcribe_usd_por_min: float = 0.002
+
     # --- Ingesta (n8n / GitHub webhook) ---
     github_webhook_secret: str = ""
     ingest_api_token: str = ""

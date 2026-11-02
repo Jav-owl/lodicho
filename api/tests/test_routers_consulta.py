@@ -98,11 +98,51 @@ def test_silencio_electoral_activo_produce_solo_rechazo(client, monkeypatch):
     assert [e[0] for e in eventos] == ["rechazo"]
 
 
-def test_tipo_input_voz_produce_solo_error(client):
-    respuesta = _post_consulta(client, tipo_input="voz")
+def test_tipo_input_voz_sin_audio_id_produce_solo_error(client):
+    respuesta = _post_consulta(client, tipo_input="voz", texto="algo dictado")
     eventos = _parse_eventos(respuesta.text)
 
     assert [e[0] for e in eventos] == ["error"]
+    assert "audio" in eventos[0][1]["detalle"].lower()
+
+
+def test_tipo_input_url_produce_solo_error(client):
+    respuesta = _post_consulta(client, tipo_input="url", url_fuente="https://x.com/n")
+    eventos = _parse_eventos(respuesta.text)
+
+    assert [e[0] for e in eventos] == ["error"]
+
+
+def test_texto_demasiado_largo_se_rechaza_antes_de_llamar_a_modelos(client, monkeypatch):
+    monkeypatch.setattr(settings, "max_chars_consulta", 50)
+
+    def _no_debe_llamarse(*a, **k):
+        raise AssertionError("no debe clasificar un texto sobre el limite")
+
+    monkeypatch.setattr("app.routers.consulta.clasificar_intencion", _no_debe_llamarse)
+    respuesta = _post_consulta(client, texto="a" * 51)
+    eventos = _parse_eventos(respuesta.text)
+
+    assert [e[0] for e in eventos] == ["error"]
+    assert "50" in eventos[0][1]["detalle"]
+
+
+def test_voz_con_audio_id_guarda_audio_path(client, db_session, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "audio_path", str(tmp_path))
+    audio_id = "a" * 32
+    (tmp_path / f"{audio_id}.webm").write_bytes(b"x")
+    monkeypatch.setattr(
+        "app.routers.consulta.clasificar_intencion",
+        lambda texto: CategoriaIntencion.recomendacion_voto,
+    )
+
+    respuesta = _post_consulta(client, tipo_input="voz", texto="vote por Ana", audio_id=audio_id)
+    eventos = _parse_eventos(respuesta.text)
+
+    assert [e[0] for e in eventos] == ["rechazo"]
+    fila = db_session.scalars(select(Consulta)).one()
+    assert fila.tipo_input.value == "voz"
+    assert fila.audio_path.endswith(f"{audio_id}.webm")
 
 
 def test_texto_vacio_produce_solo_error(client):

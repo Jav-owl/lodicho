@@ -38,7 +38,7 @@ export async function enviarConsulta(payload, handlers) {
   formData.set("tipo_input", payload.tipoInput);
   if (payload.texto) formData.set("texto", payload.texto);
   if (payload.urlFuente) formData.set("url_fuente", payload.urlFuente);
-  if (payload.audioBlob) formData.set("audio", payload.audioBlob, "consulta.webm");
+  if (payload.audioId) formData.set("audio_id", payload.audioId);
   if (payload.candidaturaId) formData.set("candidatura_id", payload.candidaturaId);
 
   let response;
@@ -50,6 +50,29 @@ export async function enviarConsulta(payload, handlers) {
   }
 
   await leerStreamSSE(response, handlers);
+}
+
+const EXT_AUDIO = { "audio/webm": "webm", "audio/ogg": "ogg", "audio/mp4": "m4a", "audio/mpeg": "mp3", "audio/wav": "wav" };
+
+// Sube el audio para transcribirlo. Devuelve { audio_id, texto, duracion_s, costo_estimado_usd }
+// o lanza ErrorAPI con el mensaje del servidor (limite de duracion, tamano, cuota...).
+export async function transcribirAudio(blob) {
+  const formData = new FormData();
+  const tipo = (blob.type || "audio/webm").split(";")[0];
+  formData.set("audio", blob, `consulta.${EXT_AUDIO[tipo] || "webm"}`);
+  let response;
+  try {
+    response = await fetch(`${BASE_URL}/transcribir`, { method: "POST", body: formData });
+  } catch (causa) {
+    throw new ErrorAPI("No se pudo conectar con el servidor.", causa);
+  }
+  if (response.status === 429) throw new ErrorAPI("Demasiados audios seguidos. Espera un minuto e intenta de nuevo.");
+  if (!response.ok) {
+    let detalle = `El servidor respondió ${response.status}.`;
+    try { detalle = (await response.json()).detail || detalle; } catch {}
+    throw new ErrorAPI(detalle);
+  }
+  return response.json();
 }
 
 export async function pedirVeredicto(declaracionId, candidaturaId, handlers) {
