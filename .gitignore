@@ -25,6 +25,8 @@ htmlcov/
 /data/
 /pgdata/
 /qdrant_storage/
+docs/manual-lodicho.xlsx
+docs/~$*
 
 # --- Certificados TLS (Let's Encrypt): claves privadas, nunca al repo ---
 /certbot/
