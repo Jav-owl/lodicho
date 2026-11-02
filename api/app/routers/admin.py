@@ -31,7 +31,7 @@ from sqlalchemy.orm import Session
 
 from app.config.settings import settings
 from app.db.models import Candidato, Candidatura, Documento
-from app.db.models.enums import EstadoPlanCandidatura
+from app.db.models.enums import EstadoCandidatura, EstadoPlanCandidatura
 from app.db.session import SessionLocal, get_session
 from app.services import admin_auth, corpus_git, corpus_validation, pdf_conversion
 from app.services.ingest import (
@@ -592,6 +592,7 @@ class CandidaturaResumen(BaseModel):
     jurisdiccion_dpa: str
     periodo: str
     estado_plan: str
+    estado_candidatura: str
     doc_id_plan: str | None
     candidatos: list[CandidatoResumen] = []
 
@@ -605,6 +606,7 @@ def _resumen_candidatura(c: Candidatura) -> CandidaturaResumen:
         jurisdiccion_dpa=c.jurisdiccion_dpa,
         periodo=c.periodo,
         estado_plan=c.estado_plan.value,
+        estado_candidatura=c.estado_candidatura.value,
         doc_id_plan=c.doc_id_plan,
         candidatos=[_resumen_candidato(cand) for cand in sorted(c.candidatos, key=lambda x: x.posicion_lista)],
     )
@@ -623,6 +625,7 @@ class CandidaturaCrear(BaseModel):
     jurisdiccion_dpa: str
     periodo: str
     estado_plan: str
+    estado_candidatura: str = "inscrito"
     doc_id_plan: str | None = None
 
 
@@ -631,6 +634,9 @@ def crear_candidatura(datos: CandidaturaCrear, session: Session = Depends(get_se
     valores_validos = {e.value for e in EstadoPlanCandidatura}
     if datos.estado_plan not in valores_validos:
         raise HTTPException(status_code=422, detail=f"estado_plan debe ser uno de {sorted(valores_validos)}")
+
+    if datos.estado_candidatura not in {e.value for e in EstadoCandidatura}:
+        raise HTTPException(status_code=422, detail="estado_candidatura debe ser inscrito u oficializado")
 
     campos_vacios = [
         campo
@@ -647,6 +653,7 @@ def crear_candidatura(datos: CandidaturaCrear, session: Session = Depends(get_se
         jurisdiccion_dpa=datos.jurisdiccion_dpa.strip(),
         periodo=datos.periodo.strip(),
         estado_plan=EstadoPlanCandidatura(datos.estado_plan),
+        estado_candidatura=EstadoCandidatura(datos.estado_candidatura),
         doc_id_plan=(datos.doc_id_plan or "").strip() or None,
     )
     session.add(candidatura)

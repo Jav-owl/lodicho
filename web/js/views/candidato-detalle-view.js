@@ -58,6 +58,7 @@ export async function render(container, params) {
 
     <div class="console-card">
       <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom: ${sinPlan ? "16px" : "0"};">
+        <span class="veredicto-badge veredicto-badge--${candidatura.estado_candidatura === "oficializado" ? "viable_y_en_plan" : "pendiente"}">${candidatura.estado_candidatura === "oficializado" ? "Candidatura oficializada" : "Candidatura inscrita (pendiente de oficialización)"}</span>
         <span class="veredicto-badge veredicto-badge--incomprobable">Jurisdicción DPA ${escapeHtml(candidatura.jurisdiccion_dpa)}</span>
         ${sinPlan ? `<span class="veredicto-badge veredicto-badge--informacion_falsa">No registró plan de trabajo ante el CNE</span>` : ""}
       </div>

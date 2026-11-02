@@ -315,6 +315,7 @@ function candidaturaCardHtml(candidatura) {
         <div>
           <strong>${escapeHtml(candidatura.organizacion_politica)}</strong> — Lista ${escapeHtml(candidatura.lista_numero)}
           <div style="font-size:13px; color:var(--color-text-subtle);">${escapeHtml(candidatura.dignidad)} · ${escapeHtml(candidatura.jurisdiccion_dpa)} · ${escapeHtml(candidatura.periodo)}</div>
+          <span class="veredicto-badge veredicto-badge--${candidatura.estado_candidatura === "oficializado" ? "viable_y_en_plan" : "pendiente"}" style="margin-top:6px;">${candidatura.estado_candidatura === "oficializado" ? "Oficializada" : "Inscrita"}</span>
         </div>
       </div>
       <ul style="margin:0 0 12px; padding-left:18px; font-size:14px;">${candidatosHtml}</ul>
@@ -335,6 +336,124 @@ function candidaturaCardHtml(candidatura) {
 }
 
 function renderSubir(container, api) {
+  container.innerHTML = `
+    <div class="console-card">
+      <label style="font-size:12px; font-weight:600; color:var(--color-text-subtle); display:block; margin-bottom:6px;">¿Qué va a cargar?</label>
+      <select class="console-select" id="admin-destino">
+        <option value="corpus">Un documento para el corpus (PDF o Markdown)</option>
+        <option value="candidaturas">Lista de candidaturas (CSV) — no es un documento del corpus</option>
+      </select>
+    </div>
+    <div id="admin-destino-contenido"></div>
+  `;
+  const destino = container.querySelector("#admin-destino");
+  const contenido = container.querySelector("#admin-destino-contenido");
+  const pintar = () => (destino.value === "candidaturas"
+    ? renderCargaCandidaturas(contenido, api)
+    : renderSubirCorpus(contenido, api));
+  destino.addEventListener("change", pintar);
+  pintar();
+}
+
+function renderCargaCandidaturas(container, api) {
+  container.innerHTML = `
+    <div class="console-card">
+      <h2 style="font-size:17px; font-weight:700; margin-bottom:8px;">Cargar lista de candidaturas</h2>
+      <p style="font-size:13.5px; color:var(--color-text-muted); line-height:1.5; margin-bottom:12px;">
+        Esta carga actualiza la <strong>lista de candidaturas</strong>; no agrega nada al corpus de documentos.
+        Una fila por candidato. Si vuelve a cargar el archivo (o uno actualizado), no se duplica nada:
+        se actualiza el estado de cada lista (<em>inscrito</em> → <em>oficializado</em>).
+        Si hay un solo error, no se guarda nada.
+      </p>
+      <p style="font-size:13px; margin-bottom:16px;">
+        <a href="plantillas/candidaturas-plantilla.csv" download>Descargar plantilla CSV</a>
+        · También acepta el formato del CNE (Candidato/a, Organización política, Número de lista, Dignidad, Jurisdicción DPA, Período, Estado CNE). Si no trae estado del plan, las candidaturas nuevas quedan con plan «registrado».
+      </p>
+      <div class="dropzone-apple" id="csv-dropzone" style="margin-bottom:16px;">
+        <div class="dropzone-apple__icon">${ICONS.upload}</div>
+        <div class="dropzone-apple__title" id="csv-titulo">Arrastra o haz clic para elegir el archivo .csv</div>
+        <div class="dropzone-apple__subtitle">Máximo 5 MB. Se muestra una vista previa antes de guardar.</div>
+        <input type="file" id="csv-archivo" accept=".csv,text/csv" hidden />
+      </div>
+      <button type="button" class="btn-primary" id="csv-validar" style="width:100%;" disabled>Validar archivo</button>
+      <div id="csv-resultado" style="margin-top:16px;"></div>
+    </div>
+  `;
+  const input = container.querySelector("#csv-archivo");
+  const titulo = container.querySelector("#csv-titulo");
+  const validar = container.querySelector("#csv-validar");
+  const resultado = container.querySelector("#csv-resultado");
+  let archivo = null;
+
+  container.querySelector("#csv-dropzone").addEventListener("click", () => input.click());
+  input.addEventListener("change", () => {
+    archivo = input.files[0] || null;
+    titulo.textContent = archivo ? archivo.name : "Arrastra o haz clic para elegir el archivo .csv";
+    validar.disabled = !archivo;
+    resultado.innerHTML = "";
+  });
+
+  validar.addEventListener("click", async () => {
+    validar.disabled = true;
+    resultado.innerHTML = `<div class="loading-state"><div class="apple-spinner"></div><p>Validando...</p></div>`;
+    try {
+      const r = await api.importarCandidaturas(archivo, false);
+      resultado.innerHTML = vistaPreviaImportacionHtml(r);
+      const confirmar = resultado.querySelector("#csv-confirmar");
+      if (confirmar) {
+        confirmar.addEventListener("click", async () => {
+          confirmar.disabled = true;
+          confirmar.textContent = "Guardando...";
+          try {
+            const final = await api.importarCandidaturas(archivo, true);
+            mostrarToast("Lista de candidaturas actualizada");
+            resultado.innerHTML = `<div class="banner banner--viable">Carga aplicada: ${final.candidaturas.nuevas} candidaturas nuevas, ${final.candidaturas.actualizadas} actualizadas, ${final.candidatos.nuevos} candidatos nuevos.</div>`;
+            titulo.textContent = "Arrastra o haz clic para elegir el archivo .csv";
+            archivo = null;
+            input.value = "";
+          } catch (err) {
+            resultado.innerHTML = `<div class="banner banner--danger">${escapeHtml(err.message)}</div>`;
+          }
+        });
+      }
+    } catch (err) {
+      resultado.innerHTML = `<div class="banner banner--danger">${escapeHtml(err.message)}</div>`;
+    } finally {
+      validar.disabled = !archivo;
+    }
+  });
+}
+
+function vistaPreviaImportacionHtml(r) {
+  const c = r.candidaturas;
+  const k = r.candidatos;
+  const avisos = r.avisos.map((a) => `<li>${escapeHtml(a)}</li>`).join("");
+  const cambios = r.cambios_estado.map((x) =>
+    `<li>${escapeHtml(x.organizacion)} (lista ${escapeHtml(x.lista_numero)}, ${escapeHtml(x.dignidad)}, ${escapeHtml(x.jurisdiccion_dpa)}): ${escapeHtml(x.de)} → <strong>${escapeHtml(x.a)}</strong></li>`
+  ).join("");
+  if (r.total_errores) {
+    const oculto = r.total_errores - r.errores.length;
+    return `
+      <div class="banner banner--danger" style="margin-bottom:12px;">
+        Se encontraron ${r.total_errores} error(es). No se guardó nada: corrija el archivo y vuelva a validarlo.
+      </div>
+      <ul style="font-size:13px; padding-left:18px; line-height:1.6;">
+        ${r.errores.map((e) => `<li>${e.fila ? `Fila ${e.fila}: ` : ""}${escapeHtml(e.mensaje)}</li>`).join("")}
+        ${oculto > 0 ? `<li>... y ${oculto} más.</li>` : ""}
+      </ul>`;
+  }
+  return `
+    <div class="banner banner--viable" style="margin-bottom:12px;">Archivo válido: ${r.filas_leidas} filas. Todavía no se guardó nada.</div>
+    <ul style="font-size:14px; padding-left:18px; line-height:1.7; margin-bottom:12px;">
+      <li>Candidaturas: <strong>${c.nuevas}</strong> nuevas · <strong>${c.actualizadas}</strong> actualizadas · ${c.sin_cambios} sin cambios</li>
+      <li>Candidatos: <strong>${k.nuevos}</strong> nuevos · <strong>${k.actualizados}</strong> con posición cambiada · ${k.sin_cambios} sin cambios${k.no_incluidos ? ` · ${k.no_incluidos} ya existentes que no vienen en el archivo (se conservan)` : ""}</li>
+    </ul>
+    ${cambios ? `<p style="font-size:13px; font-weight:600;">Cambios de estado</p><ul style="font-size:13px; padding-left:18px;">${cambios}</ul>` : ""}
+    ${avisos ? `<p style="font-size:13px; font-weight:600; color:var(--veredicto-enganoso-text);">Avisos</p><ul style="font-size:13px; padding-left:18px;">${avisos}</ul>` : ""}
+    <button type="button" class="btn-primary" id="csv-confirmar" style="width:100%; margin-top:12px;">Guardar en la lista de candidaturas</button>`;
+}
+
+function renderSubirCorpus(container, api) {
   container.innerHTML = `
     <div class="console-card">
       <div style="margin-bottom: 16px;">

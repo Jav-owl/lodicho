@@ -5,7 +5,7 @@ from sqlalchemy import ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
-from app.db.models.enums import EstadoPlanCandidatura
+from app.db.models.enums import EstadoCandidatura, EstadoPlanCandidatura
 
 
 class Candidatura(Base):
@@ -23,6 +23,13 @@ class Candidatura(Base):
     estado_plan: Mapped[EstadoPlanCandidatura] = mapped_column(
         SAEnum(EstadoPlanCandidatura, name="estado_plan_candidatura"),
         nullable=False,
+        index=True,
+    )
+    estado_candidatura: Mapped[EstadoCandidatura] = mapped_column(
+        SAEnum(EstadoCandidatura, name="estado_candidatura"),
+        nullable=False,
+        default=EstadoCandidatura.inscrito,
+        server_default=EstadoCandidatura.inscrito.value,
         index=True,
     )
 

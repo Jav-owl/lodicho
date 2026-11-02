@@ -25,6 +25,15 @@ class EstadoPlanCandidatura(str, enum.Enum):
     sin_plan_registrado = "sin_plan_registrado"
 
 
+class EstadoCandidatura(str, enum.Enum):
+    """Etapa de la candidatura ante el CNE. Una carga nueva de la lista la va
+    actualizando (inscrito -> oficializado). Distinto de `EstadoPlanCandidatura`
+    (si registro plan) y de `EstadoAnalisis` (flujo editorial de un veredicto)."""
+
+    inscrito = "inscrito"
+    oficializado = "oficializado"
+
+
 class TipoInput(str, enum.Enum):
     voz = "voz"
     texto = "texto"

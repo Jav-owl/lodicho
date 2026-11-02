@@ -116,7 +116,10 @@ function candidaturaCardHtml(c) {
     <div class="recent-card" data-candidatura-id="${escapeHtml(String(c.id))}">
       <div class="recent-card__top">
         <span class="recent-card__cand">${nombres}</span>
-        ${sinPlan ? `<span class="veredicto-badge veredicto-badge--incomprobable">Sin plan</span>` : ""}
+        <span>
+          <span class="veredicto-badge veredicto-badge--${c.estado_candidatura === "oficializado" ? "viable_y_en_plan" : "pendiente"}">${c.estado_candidatura === "oficializado" ? "Oficializada" : "Inscrita"}</span>
+          ${sinPlan ? `<span class="veredicto-badge veredicto-badge--incomprobable">Sin plan</span>` : ""}
+        </span>
       </div>
       <p class="recent-card__text">
         ${escapeHtml(etiquetaDignidad(c.dignidad))} — ${escapeHtml(c.organizacion_politica)} (Lista ${escapeHtml(c.lista_numero)})

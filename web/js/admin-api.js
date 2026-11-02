@@ -174,3 +174,11 @@ export function crearCandidato(candidaturaId, datos) {
     body: JSON.stringify(datos),
   });
 }
+
+// Carga masiva de candidaturas (CSV). aplicar=false: solo vista previa, no escribe.
+export function importarCandidaturas(archivo, aplicar) {
+  const formData = new FormData();
+  formData.set("archivo", archivo);
+  formData.set("aplicar", aplicar ? "true" : "false");
+  return llamar("/candidaturas/importar", { method: "POST", body: formData });
+}

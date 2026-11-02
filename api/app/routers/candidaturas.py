@@ -35,6 +35,7 @@ class CandidaturaResumen(BaseModel):
     jurisdiccion_dpa: str
     periodo: str
     estado_plan: str
+    estado_candidatura: str
     candidatos: list[CandidatoInfo]
 
 
@@ -47,6 +48,7 @@ def _a_resumen(c: Candidatura) -> CandidaturaResumen:
         jurisdiccion_dpa=c.jurisdiccion_dpa,
         periodo=c.periodo,
         estado_plan=c.estado_plan.value,
+        estado_candidatura=c.estado_candidatura.value,
         candidatos=[
             CandidatoInfo(id=cand.id, nombre=cand.nombre, posicion_lista=cand.posicion_lista)
             for cand in sorted(c.candidatos, key=lambda x: x.posicion_lista)
