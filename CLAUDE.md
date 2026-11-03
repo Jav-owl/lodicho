@@ -448,7 +448,8 @@ bootstrap y mantenimiento: `docs/deploy.md`.
 POST /api/v1/consulta  (SSE)
   │
   1. Normalizar input:
-     - audio  → Gemini 2.5 Flash → texto + idioma + confianza
+     - voz    → ya transcrito por POST /api/v1/transcribir (OpenAI o Gemini); llega
+       como texto + audio_id, el audio original queda archivado
      - url    → extraer + archivar + separar cita_directa / parafrasis
      - texto  → directo
   │
@@ -533,9 +534,9 @@ sin build step. Estructura `web/js/{api.js, admin-api.js, views/, components/}`.
 **Instalado y funcionando:** shell de la app (header, nav inferior, tema
 claro/oscuro), vistas Inicio / Historial / Acerca de, y el panel de admin (`#/admin`,
 ver sección propia). Enviar una consulta de **texto** ya funciona de punta a punta
-contra `/api/v1/consulta`. Lo que **no** funciona todavía: el composer ya graba/adjunta
-audio y acepta URL, pero el backend rechaza ambos sin procesarlos (ver "Estado
-actual"), y no hay pantalla de revisión/publicación de veredictos.
+contra `/api/v1/consulta`, y también por **dictado/audio** (transcribir → revisar → enviar).
+Lo que **no** funciona todavía: el composer acepta URL pero el backend la rechaza sin
+procesarla (ver "Estado actual"), y no hay pantalla de revisión/publicación de veredictos.
 
 **Composer único** (no tabs separados para texto/voz/URL): una sola caja de texto que
 crece, con botones para dictar, subir audio pregrabado, y pegar URL desde el
@@ -543,11 +544,12 @@ portapapeles. El modo (`texto` / `voz` / `url`) se infiere al enviar, no lo elig
 usuario de antemano.
 
 **Entrada por voz (dictado, no streaming):**
-- Web Speech API para vista previa en vivo mientras habla (gratis, en dispositivo)
-- `MediaRecorder` graba en paralelo; al soltar sube el blob
-- Gemini produce la transcripción autoritativa
-- El texto cae en **el mismo campo** donde habría escrito → un solo pipeline
-- Si la confianza es baja: mostrar editable con aviso "revisa si esto es lo que dijiste"
+- `MediaRecorder` graba (corte automático a 60 s con contador); sin Web Speech API: dos
+  consumidores del micrófono a la vez fallaban y no hay vista previa en vivo
+- Al soltar, el blob sube a `POST /api/v1/transcribir` (OpenAI `gpt-4o-mini-transcribe` por
+  defecto; Gemini Flash con `TRANSCRIPTION_PROVIDER=gemini`); la duración se mide con ffmpeg
+- El texto cae en **el mismo campo** donde habría escrito, editable → un solo pipeline; el
+  usuario lo revisa antes de enviar
 - Guardar siempre el audio original (evidencia ante impugnación)
 - `getUserMedia` requiere HTTPS — en dev usar `localhost`, no IP de LAN
 
@@ -605,16 +607,15 @@ confiar en el código y en `docker compose ps` antes que en este párrafo.
 - `app/services/ingest.py` (chunk → embeddings → Qdrant → Postgres), compartido entre
   `make ingest` y el panel — probado con integración, sin contenido real en producción.
 - `GET /api/v1/estado` (bandera de silencio electoral) — implementado.
-- `POST /api/v1/consulta` (SSE) — **implementado, pero solo entrada de texto.**
+- `POST /api/v1/consulta` (SSE) — **implementado: texto y voz (no URL).**
   Clasifica intención (rechazo fijo para recomendación de voto / opinión / comparación
   de calidad), resuelve candidatura (extracción de nombre vía Gemini + búsqueda +
   desambiguación, con fallback por dignidad), recupera evidencia dirigida
   (`planes_trabajo` filtrado por `candidatura_id`, `marco_legal` filtrado por
   `nivel_gobierno`), persiste `Consulta`/`Declaracion`, y devuelve el evento
-  `evidencia` de inmediato. Rechaza explícitamente `voz` y `url` con
-  "Esta version solo admite entrada de texto", y `comparacion_factual` con "no
-  disponible todavía" — el frontend (composer con dictado/adjuntar audio/URL) ya está
-  armado esperando que el backend soporte esto.
+  `evidencia` de inmediato. `voz` exige un `audio_id` válido de `/transcribir`. Rechaza
+  `url` ("Esta version solo admite entrada de texto o dictado") y `comparacion_factual`
+  ("no disponible todavía"); el composer ya acepta URL esperando que el backend la soporte.
 - `POST /api/v1/veredicto` (SSE) — **implementado.** Encola `generar_veredicto` en ARQ;
   el worker corre las tres salvaguardas: auto-consistencia (3 corridas a temperatura
   0.3), los dos validadores semánticos expresables en código
@@ -663,12 +664,13 @@ confiar en el código y en `docker compose ps` antes que en este párrafo.
   endpoint ni consumidor; fusionar un PR en `lodicho-corpus` no reindexa nada.
 - Detección de `.md` eliminado del corpus (status `removed` en la tabla de estados de
   archivo) — sigue sin un flujo que lo detecte.
-- Contenido real en el corpus: tres documentos confirmados en producción, indexados con
-  OpenAI: una ordenanza metropolitana de Quito (2 chunks), el COOTAD (`marco_legal`,
-  `nivel_gobierno: todos`, 609 chunks) y la Constitución (452 chunks, `todos`). La recuperación
-  se probó por script ("vialidad y tránsito" trae Arts. 129, 130 y 55 del COOTAD para
-  `cantonal` y `provincial`). Faltan los planes de trabajo y más normas (se cargan por el
-  panel). Todavía no se probó una consulta real de punta a punta con una candidatura.
+- Contenido real en el corpus (2026-11-02): siete normas en `marco_legal`, todas indexadas con
+  OpenAI: COOTAD (609 chunks), Constitución (452), COMF (638), COA (349), COPLAFIP (186), LOPC
+  (101) —todas con los tres niveles— y una ordenanza de Quito sobre multas de tránsito (2 chunks,
+  solo `cantonal`). Verificado con `api/scripts/sondeo_corpus.py` (inventario + sondas: cada norma
+  es alcanzable y el filtro por nivel funciona; ejecutarlo por stdin tras cambiar el chunker, el
+  proveedor de embeddings o los niveles). Faltan los planes de trabajo (se cargan por el panel).
+  Todavía no se probó una consulta real de punta a punta con una candidatura.
 - **Competencias por nivel (pendiente de diseño).** Con `nivel_gobierno: todos` el COOTAD
   entero sale igual para `cantonal` y `provincial`: la búsqueda del nivel provincial puede
   traer el Art. 55 (competencias municipales) en vez del Art. 42 (provinciales), y solo manda
